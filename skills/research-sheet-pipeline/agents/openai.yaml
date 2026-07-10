@@ -1,0 +1,4 @@
+interface:
+  display_name: "调研表格工作流"
+  short_description: "将网页调研、数据整理、文档制作与表格操作组合为可复用链路"
+  default_prompt: "Use $research-sheet-pipeline to compose and execute a modular research, document, and spreadsheet workflow."
