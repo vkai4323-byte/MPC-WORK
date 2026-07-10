@@ -1,0 +1,4 @@
+interface:
+  display_name: "调研表格工作流"
+  short_description: "用 API 优先、浏览器兜底的方式快速调研并可靠回填表格"
+  default_prompt: "Use $research-sheet-pipeline to run the shortest safe API/browser research and spreadsheet writeback workflow."
