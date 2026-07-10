@@ -1,0 +1,39 @@
+{
+  "job_id": "replace-me",
+  "objective": "Describe the desired outcome",
+  "entities": [],
+  "tools": {
+    "browser_skill": "kimi-webbridge",
+    "sheet_skill": "popo-sheet",
+    "feishu_cli": "C:\\Users\\Admin\\Documents\\Codex\\2026-07-01\\new-chat\\outputs\\feishu-doc-tools\\feishu-doc.ps1"
+  },
+  "sheet": {
+    "mode": "existing",
+    "platform": "popo",
+    "url": "",
+    "sheet_name": "",
+    "key": "",
+    "columns": []
+  },
+  "research": {
+    "enabled": true,
+    "fields": [],
+    "sources": [],
+    "evidence": "url+screenshot"
+  },
+  "documents": {
+    "mode": "none",
+    "system": "feishu-cli",
+    "template": "",
+    "link_column": "",
+    "permission": ""
+  },
+  "writeback": {
+    "mode": "fill",
+    "target_columns": []
+  },
+  "verification": {
+    "readback": true,
+    "visual": true
+  }
+}
