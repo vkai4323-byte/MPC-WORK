@@ -1,0 +1,4 @@
+interface:
+  display_name: "调研表格工作流"
+  short_description: "API 优先的表格调研、批量文档与可靠回填"
+  default_prompt: "Use $research-sheet-pipeline to choose the shortest bounded API/browser path for spreadsheet research, batch documents, optional writeback, and structural verification."

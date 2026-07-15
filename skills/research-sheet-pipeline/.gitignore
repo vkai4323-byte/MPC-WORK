@@ -1,0 +1,8 @@
+.deps/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.local.json
+.codex-runs/
