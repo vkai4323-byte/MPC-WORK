@@ -5,7 +5,11 @@
   "tools": {
     "browser_skill": "kimi-webbridge",
     "sheet_skill": "popo-sheet",
-    "feishu_cli": "C:\\Users\\Admin\\Documents\\Codex\\2026-07-01\\new-chat\\outputs\\feishu-doc-tools\\feishu-doc.ps1"
+    "bilibili_script": "scripts/bilibili_batch.py",
+    "document_provider": {
+      "platform": "feishu",
+      "mode": "auto"
+    }
   },
   "sheet": {
     "mode": "existing",
@@ -23,17 +27,25 @@
   },
   "documents": {
     "mode": "none",
-    "system": "feishu-cli",
+    "system": "feishu",
     "template": "",
     "link_column": "",
     "permission": ""
   },
   "writeback": {
-    "mode": "fill",
+    "mode": "none",
     "target_columns": []
   },
   "verification": {
     "readback": true,
     "visual": false
+  },
+  "execution": {
+    "artifact_dir": ".codex-runs/research-sheet-pipeline/replace-me",
+    "preflight_seconds": 60,
+    "popo_read_seconds": 90,
+    "api_batch_seconds": 120,
+    "document_transaction_seconds": 120,
+    "fallbacks_per_stage": 1
   }
 }
