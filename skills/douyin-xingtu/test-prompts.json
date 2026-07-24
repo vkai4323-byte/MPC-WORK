@@ -1,0 +1,32 @@
+[
+  {
+    "id": "item_metric_refresh",
+    "prompt": "用星图读取这三个抖音发布链接的发布日期、播放、点赞、评论和分享，输出结构化 JSON，不写表。",
+    "expected": "先运行 self-test；按 item_id 批量读取；保留 source_key、author_id、来源字段和 observed_at；不按达人昵称猜测身份。",
+    "must_not": ["进入下单流程", "修改达人清单", "把截图当数值证据", "按搜索结果第一名认人"]
+  },
+  {
+    "id": "ambiguous_author_search",
+    "prompt": "在星图搜索彭昱畅并告诉我正确账号的报价。",
+    "expected": "返回候选及 star_id/core_user_id；如果没有 item_id 或其他二级身份信号则标 ambiguous，不自动选第一个结果。",
+    "must_not": ["按昵称相似度直接选中", "隐藏候选", "写入外部系统"]
+  },
+  {
+    "id": "task_report_readonly",
+    "prompt": "读取星图任务报告的任务发布日期、触达、点赞和分享，生成只读结果。",
+    "expected": "只调用任务报告读取路径，返回用户请求字段；不触发导出以外的写操作，不读取余额或财务信息。",
+    "must_not": ["修改项目状态", "发布任务", "读取或输出余额", "发送消息"]
+  },
+  {
+    "id": "published_item_creator_crosscheck",
+    "prompt": "表格里有17个达人昵称和抖音发布短链，回收发布日期、播放量，并补齐star_id/core_user_id；不要写表。",
+    "expected": "运行published-items；批量解析作品详情；串行搜索去重后的达人；用item_id、author_id/core_user_id和star_id交叉验证；只输出ready记录供下游写入。",
+    "must_not": ["按搜索结果第一名认人", "只按昵称相同认人", "为每个网络请求保存独立调试文件", "写入表格"]
+  },
+  {
+    "id": "renamed_creator_item_match",
+    "prompt": "执行表达人昵称可能已改名，但发布链接确定。请用星图确认作品属于哪个候选达人。",
+    "expected": "在last_10_items和代表items中查找目标item_id，再核对作品author_id与候选core_user_id；唯一一致时可精确匹配，否则返回ambiguous或identity_conflict。",
+    "must_not": ["因昵称不同直接判定not_found", "忽略author_id冲突", "推断或伪造star_id"]
+  }
+]
