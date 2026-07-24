@@ -1,0 +1,4 @@
+interface:
+  display_name: "抖音星图数据"
+  short_description: "通过登录态核验抖音发布作品、星图达人、指标、报价和任务报告"
+  default_prompt: "Use $douyin-xingtu to retrieve and cross-verify Douyin publication or creator data from my authenticated Xingtu session."

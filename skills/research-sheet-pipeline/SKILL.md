@@ -37,6 +37,7 @@ Read `references/tool-routing.md` before selecting tools. Read `references/modul
 ## Bound the run
 
 - Preflight a selected route once. For Bilibili, run the script entry point `python scripts/bilibili_batch.py --self-test` with the configured workspace Python. If `python` is a Windows Store shim, resolve the bundled runtime first; do not test a global import that bypasses `.deps`.
+- For authenticated Douyin/Xingtu work, load `$douyin-xingtu` and run `python scripts/xingtu_batch.py self-test` once from that skill's directory. Keep the original sheet key unchanged and accept only its documented output statuses.
 - For documents, run `python scripts/document_provider.py --format json`, repeating `--required-capability` for the job's exact capability list. Parse its JSON even when exit code 3 or 4 reports an unfinished preflight. Use a ready CLI or a capability-equivalent authenticated Agent connector. If credentials are missing, instruct the user to configure them locally; never request, print, or persist `FEISHU_APP_SECRET` in chat, manifests, or run artifacts.
 - Default budgets: tool preflight 60 seconds, POPO read-only acquisition 90 seconds total, one API batch 120 seconds, and one document transaction 120 seconds. On expiry, stop that route, preserve completed work, and choose at most one stated fallback.
 - If a shell call yields a cell ID, call `wait` immediately. Poll for at most 60 seconds at a time; after two no-progress waits, terminate it and use the bounded fallback.
@@ -83,6 +84,20 @@ Prefer the bundled `scripts/bilibili_batch.py` for public Bilibili data:
 Keep concurrency at 2 by default. On `412`, retry once serially, then use the script's bounded user-search fallback; mark incomplete recent uploads as `partial`. Use `$kimi-webbridge` only for unresolved items, login/private state, UI-only fields, or an API failure after the bounded fallback. Never silently convert a whole creator batch into serial browser navigation.
 
 If `--self-test` reports a missing dependency, request permission once to install `requirements.txt`. The script prefers an ignored `.deps` directory when present and otherwise uses the configured Python environment; do not test a different interpreter.
+
+## Route Douyin through Xingtu
+
+Use `$douyin-xingtu` for authenticated Douyin creator, item, pricing, ranking, content, or task-report data.
+
+- Sheet rows with both creator identity and a Douyin URL/item ID: batch with `python scripts/xingtu_batch.py published-items`; this must verify item `author_id`, candidate `core_user_id`, `star_id`, and candidate item membership before writeback.
+- Known Douyin URLs or item IDs without an expected creator: batch with `python scripts/xingtu_batch.py items`.
+- Creator-only queries: use `authors`; never select the first fuzzy-name result.
+- Match identity in this order: `item_id -> author_id/core_user_id -> star_id -> exact display name`.
+- Preserve the sheet's original display name as `source_key`; keep normalized values separate.
+- Send only `ready` records into a write plan. Stop the affected record on `ambiguous`, `identity_conflict`, `metric_conflict`, `not_found`, or `auth_required`.
+- Keep `observed_at`, endpoint, and source field with every writable metric.
+
+Do not reproduce Xingtu network requests in the pipeline. The dedicated skill owns login checks, endpoint schemas, read bounds, and the mutation blacklist.
 
 ## Gate POPO reads and writes
 
