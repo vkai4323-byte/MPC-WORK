@@ -2,6 +2,15 @@
 
 Read this reference whenever `documents.mode` is `create` or `update`.
 
+## Contents
+
+- Resolve a provider
+- Keep local overrides outside the skill
+- Configure Feishu credentials safely
+- One writer and unknown outcomes
+- Audience-facing content
+- Preserve completed work
+
 ## Resolve a provider
 
 Run from the skill directory:
@@ -76,7 +85,35 @@ Run a resolved provider without revealing its locator:
 python scripts/document_provider.py --run -- resolve "https://example.feishu.cn/wiki/TOKEN"
 ```
 
-An external legacy CLI is reported as `legacy_unverified`; perform one read-only resolve/raw preflight before mutation. The bundled adapter supports `FEISHU_REGION=feishu|lark`. Its grouped text replacement uses one idempotent Feishu batch update for at most 200 affected blocks, then verifies exact content and an inline-style-aware structural signature. If it reports `apply_status: unknown` or failed read-back, inspect the target first and resume from verification; never blindly replay the batch. Public-anyone editing additionally requires `--confirm-file-token` matching the exact target and always performs a permission read-back.
+An external legacy CLI is reported as `legacy_unverified`; perform one read-only resolve/raw preflight before mutation. The bundled adapter supports `FEISHU_REGION=feishu|lark`. Its grouped text replacement uses one idempotent Feishu batch update for at most 200 affected blocks, then verifies exact content and an inline-style-aware structural signature. Public-anyone editing additionally requires `--confirm-file-token` matching the exact target and always performs a permission read-back.
+
+## One writer and unknown outcomes
+
+Before mutation, assign one writer owner and one idempotency key to the destination. No other process, task turn, or fallback may mutate that destination until the owner reaches `verified`, `blocked`, or a freshly observed safe-to-retry state.
+
+If a command times out, exits without a conclusive read-back, or reports `apply_status: unknown`:
+
+1. retain `running` while the original process is live; otherwise record `unknown`; both require `writer_count=1`, writer owner, idempotency key, process state, and `actual_state_checked=false`;
+2. retain the writer lock;
+3. wait for or terminate the original process so it cannot continue in the background;
+4. resolve/read the target from fresh state;
+5. compare intended content, structural signature, and permission;
+6. release the writer and mark verified only when the intended post-state is already present, with `process_state=ended`, `actual_state_checked=true`, and a non-empty readback proof;
+7. otherwise compute only the remaining delta and retry once with fresh preconditions/idempotency.
+
+Never start a recovery writer while the original process or outcome is unresolved. A timeout is not proof that no mutation occurred.
+
+## Audience-facing content
+
+For `documents.audience=external`, require `documents.content_policy=deliverable_only`. Before apply and again after read-back, reject:
+
+- internal reasoning or strategy notes;
+- task instructions, constraints, or acceptance criteria;
+- debugging/recovery commentary;
+- placeholders that describe what content should exist;
+- copied prompt text or change-plan language.
+
+Keep those details only in the manifest/checkpoint/change plan. The document itself must contain only audience-facing material.
 
 ## Preserve completed work
 
