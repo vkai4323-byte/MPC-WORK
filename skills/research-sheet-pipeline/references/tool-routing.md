@@ -1,28 +1,44 @@
 # Tool routing
 
-## Mandatory routes
+## Contents
 
-| Target or action | Primary route | Bounded fallback |
+- Capability ownership
+- Preflight and process lifecycle
+- Bilibili API-first route
+- POPO through the owning adapter
+- Authenticated social research
+- Portable Feishu provider
+- Output and artifact budget
+
+## Capability ownership
+
+| Target or action | Owning capability / primary route | Bounded fallback |
 |---|---|---|
-| Read/write POPO | `$popo-sheet` + `$kimi-webbridge` | POPO skill's verified UI fallback |
+| Structured POPO read/write | `$popo-sheet` with one authenticated `$kimi-webbridge` session | POPO skill's verified UI fallback |
 | Public Bilibili videos, creators, or search | `scripts/bilibili_batch.py` | `$kimi-webbridge` for unresolved items only |
-| Login-dependent Bilibili, Douyin, Xiaohongshu, Kuaishou | `$kimi-webbridge` | Stop with disclosure if login state is unavailable |
-| Feishu documents | `scripts/document_provider.py` + a ready CLI | Authenticated Agent connector with equivalent capabilities; otherwise stop `document` |
+| Authenticated Douyin/Xingtu data | `$douyin-xingtu` with its authenticated browser session | Stop the Xingtu stage if login is unavailable |
+| Other login-dependent social research | `$kimi-webbridge` | Stop with disclosure if login is unavailable |
+| Feishu documents | `scripts/document_provider.py` + ready provider | Capability-equivalent authenticated connector; otherwise stop `document` |
 | `.xlsx`, `.csv`, `.tsv` | `$spreadsheets` | None |
-| Public non-login facts | built-in web research or a suitable API | `$kimi-webbridge` when user-visible state matters |
+| Public non-login facts | Suitable API or built-in web research | Browser only when user-visible state matters |
 
-Load the full instructions for every selected skill before action.
+Load every selected skill's full instructions before action. The pipeline composes stages; it does not take ownership of a platform's private protocol.
+
+🛑 Never reconstruct/replay POPO ShareDB/WebSocket messages or Xingtu endpoints from this pipeline. If the owning adapter cannot provide the needed structured capability within budget, stop that stage and checkpoint it.
 
 ## Preflight and process lifecycle
 
-Map each selected module to one primary tool before the first side effect.
+Map each module to one primary tool before the first side effect:
 
-- Bilibili: resolve a working workspace Python first, then run `python scripts/bilibili_batch.py --self-test` from the skill directory. If PATH resolves to the Windows Store shim, use the Python returned by the workspace dependency loader. The self-test accepts either the ignored `.deps` directory or packages installed from `requirements.txt`; do not probe a different interpreter.
-- Feishu: read `references/document-providers.md`, run the provider resolver, and keep manifest validity separate from provider readiness. Never expose a command path, `.env`, or secret in tool output.
-- Browser/sheet: reuse the current authenticated task session rather than creating a test tab.
-- If a shell call yields a cell ID, call `wait` immediately. Poll at most 60 seconds at a time. After two polls with no progress, terminate the process and take one stated fallback.
+- Bilibili: resolve workspace Python, then run `python scripts/bilibili_batch.py --self-test` from this skill directory. Do not probe a different global interpreter.
+- Douyin/Xingtu: load `$douyin-xingtu`, run `python scripts/xingtu_batch.py self-test` once from its directory, and reuse its authenticated session.
+- Feishu: read `document-providers.md`, run the resolver, and keep manifest validity separate from provider readiness. Never expose a command path, `.env`, or secret.
+- Browser/sheet: start one task session, open the supplied POPO URL with `newTab:true`, then capability-check the exact structured read/write verbs on that fresh tab. Do not borrow an earlier POPO tab for mutation. If an old tab is offline/read-only, open the original URL once in a new task tab; if a verb is absent there, stop the stage.
+- If a shell call yields a cell ID, wait immediately. Poll at most 60 seconds at a time; after two no-progress polls, terminate it and take one stated fallback.
 
-Do not stack multiple diagnostic routes for the same failure. Preserve completed upstream results.
+Source routing is additive: a manifest containing both Bilibili and Douyin/Xingtu must schedule both `bilibili_batch.py` and `$douyin-xingtu`. Detecting one source must not replace the other.
+
+Maintain one attempt ledger per stage. Switching from adapter to browser, snapshot to screenshot, or one task turn to another does not create a new retry budget. Preserve completed upstream results.
 
 ## Bilibili API-first route
 
@@ -36,59 +52,94 @@ python scripts/bilibili_batch.py --creator-input creators.json --recent 5 --outp
 python scripts/bilibili_batch.py --user-search "达人名称" --page 1 --page-size 20 --output creator-candidates.json
 ```
 
-Video input is a JSON array of strings or objects containing `key`, `url`, `bvid`, or `aid`.
+Video input: strings or keyed objects containing `url`, `bvid`, or `aid`.
 
-Creator input is a JSON array of keyed objects containing `mid` or a `space.bilibili.com/<mid>` URL. Space-URL strings are accepted; bare numeric strings are rejected to avoid confusing creator MID with the backward-compatible video AID form.
+Creator input: keyed objects containing `mid` or a `space.bilibili.com/<mid>` URL. Bare numeric strings are rejected to avoid MID/AID confusion.
 
 Routing:
 
-1. Extract and deduplicate video IDs or creator MIDs after filtering sheet rows.
+1. Freeze exact sheet `source_key` values before extracting/deduplicating video IDs or MIDs.
 2. Use concurrency 2.
-3. For creator-name discovery, list user-search candidates and confirm normalized name plus MID; do not auto-select an ambiguous name.
-4. On `412`, retry once serially. Creator lookup may then use the exact-MID candidate returned by user search; if fewer than `N` recent uploads are available, keep the result as `partial`.
-5. Validate video identity with BVID + title/owner and creator identity with name + MID.
-6. Send only failed or ambiguous records to Kimi WebBridge.
+3. For name discovery, confirm exact normalized name plus MID; never auto-select ambiguity.
+4. On `412`, retry once serially. If fewer than requested recent uploads are available, mark `partial`.
+5. Validate video with BVID + title/owner and creator with name + MID.
+6. Send only failed/ambiguous records to the browser.
+7. For known-video refreshes, preserve the input `source_key`, resolve a `b23.tv` short link once,
+   and return play, like, comment, share, and favorite counts from the video detail `stat` object.
 
-Do not take browser screenshots for public API-returned counts unless requested.
+Do not take screenshots for public API counts unless requested.
 
-## POPO through Kimi WebBridge
+## POPO through the owning adapter
 
 ### Read-only
 
-1. Reuse one authenticated session and one task tab.
-2. Fetch one structured snapshot and extract only the named tab's required columns.
-3. For `disposable_login_token=1`, never navigate the URL twice; recheck the already-open tab once.
-4. Use at most two acquisition attempts, at most one new task session, and 90 seconds total.
-5. If acquisition fails, continue independent research and request a renewed link only if the sheet is indispensable.
+1. Start one authenticated task session and open the supplied URL in a fresh tab.
+2. Fetch one structured snapshot, scan every row ID, then filter the named tab/required columns.
+3. Copy writable `source_key` values from structured cells or an exact structured export.
+4. For `disposable_login_token=1`, do not reload a stale tab. If an earlier tab is offline/read-only,
+   open the original URL once in a new task tab and continue only there.
+5. Use at most one fresh-tab recovery and 90 seconds total.
+6. If the fresh tab is unavailable, checkpoint independent work and request a renewed link only if indispensable.
 
-Do not confirm the same unavailable state through an evaluate → snapshot → screenshot → new-tab cascade.
+Do not:
+
+- keep diagnosing or refreshing an offline/read-only old tab after the fresh-tab recovery;
+- replace structured key acquisition with scroll/screenshot/OCR;
+- reconstruct ShareDB/WebSocket traffic;
+- rerun source research after POPO transport failure.
 
 ### Writeback
 
-1. Run the live editability/online gate from `references/module-contracts.md`.
-2. Fetch one fresh snapshot and match by visible key.
+1. Run the live gate from `module-contracts.md`.
+2. Fetch a fresh structured snapshot, scan all data rows before filtering, and match exact live `source_key`.
 3. Keep internal row/column IDs only for that snapshot version.
-4. Batch current targets with preconditions.
-5. Verify exact values with one new compact snapshot.
+4. Reconcile full frozen eligibility coverage.
+5. Batch current targets with preconditions.
+6. Verify exact values and the full eligible-key set with one fresh full-row scan.
 
-Do not replace structured reads with scroll-and-screenshot loops. Do not rerun source research after a POPO transport retry.
+If acknowledgement is unknown, lock the destination and read actual state before retrying. Never start a second writer while the first process/outcome is unresolved.
 
 ## Authenticated social research
 
-Use `$kimi-webbridge` only when data depends on login/cookies, client-rendered private state, or a field unavailable from the chosen API. Confirm identity with name plus an ID/secondary signal. Capture URL and observation time. Screenshot only when requested or needed to resolve ambiguity.
+Use `$kimi-webbridge` only when data depends on login/cookies, private client state, or a field absent from the chosen adapter. Confirm identity with name plus ID/secondary signal. Capture URL and observation time. Screenshot only on request or to resolve ambiguity.
+
+For Douyin/Xingtu, pass known item URLs/IDs to `$douyin-xingtu` in one batch. Preserve:
+
+- exact sheet `source_key`;
+- item, author/core-user, and star identity fields;
+- adapter status;
+- endpoint, returned source field, observation time, and alternative observations.
+
+Only `ready` records are writable. Never downgrade `ambiguous`, `identity_conflict`, or `metric_conflict` to a name-only match.
 
 ## Portable Feishu provider
 
-Run from the skill directory:
+Run from this skill directory:
 
 ```powershell
 python scripts/document_provider.py --format json
 ```
 
-Use a `ready` bundled CLI result, or a `legacy_unverified` external CLI only after a read-only target and capability preflight. If the resolver reports `needs_credentials` or `unavailable`, capability-check an authenticated document connector exposed to the Agent. Require only the exact job capabilities; for sharing, distinguish public-permission read and `anyone_editable` from arbitrary permission writes. If no route covers copy, grouped replacement/dry-run, requested permission operation, read-back, and structural signature, stop only the document stage.
+Use a `ready` bundled result or a `legacy_unverified` external CLI only after read-only target/capability preflight. If the resolver reports `needs_credentials` or `unavailable`, capability-check an authenticated connector. Require the exact job capabilities; distinguish public-permission read and `anyone_editable` from arbitrary sharing.
 
-The bundled `scripts/feishu_doc.py` contains no credentials. Run its `doctor` command before mutation. Never ask for or print `FEISHU_APP_SECRET`; instruct the user to configure it locally. Always dry-run replacement maps. The apply command batches at most 200 affected blocks with an idempotency token and verifies exact content plus the inline-style-aware structural signature; separately verify any permission change. Never substitute browser editing.
+If no route covers copy, grouped replacement/dry-run, requested permission, exact read-back, and structural signature, stop only `document`.
+
+The bundled `scripts/feishu_doc.py` contains no credentials. Run `doctor` before mutation. Never ask for or print `FEISHU_APP_SECRET`; tell the user to configure it locally. Always dry-run replacement maps. The apply command supports an idempotency token and verifies content plus an inline-style-aware structural signature. Separately verify permission changes.
+
+Browser document editing is not a fallback.
 
 ## Output and artifact budget
 
-Keep fast-path state in memory. For complex/resumable jobs, use `.codex-runs/research-sheet-pipeline/<job-id>/`. Return compact counts, IDs, unmatched items, and errors; do not print full workbook snapshots, full blocks payloads, full provider locators, or full dry-run change maps into the conversation unless debugging is requested.
+Keep fast-path state in memory. For complex/resumable jobs, use the configured relative artifact directory.
+
+Normal output allowlist:
+
+- `checkpoint.json`;
+- `change-plan.json`;
+- `verification-summary.json`.
+
+Return compact counts, exact IDs/keys, unmatched items, and errors. Do not print full workbook snapshots, document blocks, provider locators, protocol payloads, or dry-run maps unless failure debugging is explicitly enabled. Never persist credentials.
+
+Use `python scripts/checkpoint_artifacts.py write-checkpoint --input - --output <artifact-dir>/checkpoint.json` for a redacted, integrity-hashed atomic replacement; the filename is not configurable. Provide the complete compose-valid v3 manifest on standard input so no raw intermediate is stored in the artifact directory. Then run `python scripts/checkpoint_artifacts.py verify-dir --artifact-dir <artifact-dir> --mode <mode> --max-debug-files <n> --debug-retention-days <days>`. The verifier scans text/JSON for unredacted structured secrets, token-bearing URLs, credentials in free text, emails, and private keys. Under `minimal`, any non-allowlisted file is an error. Debug modes enforce the file cap and report stale artifacts; the helper never deletes files.
+
+Sensitive redaction is mandatory. If the exact writable key itself is protected data, stop persistence rather than replacing it with a redacted key. When debug artifacts are enabled, honor the manifest's file cap and retention period and redact disposable-login tokens, cookies, emails, credential material, and internal collection/session IDs before persistence.

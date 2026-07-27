@@ -1,130 +1,147 @@
 ---
 name: research-sheet-pipeline
-description: Compose efficient, evidence-backed workflows when a task combines spreadsheet context, external entity or content research, and optionally batch document production or sheet writeback. Use for POPO or online-sheet research, Bilibili/Douyin/Xiaohongshu/Kuaishou creator or content data, BRF batches derived from a sheet or research, large name-matched fills, partial refreshes, and new research tables. Do not use for a direct edit to one already-known document when no sheet or external research is needed.
+description: Compose fast, evidence-backed workflows that read a sheet, research external creator/content data, and optionally write results or document links back. Use for POPO/online-sheet metric refreshes, Bilibili or Douyin/Xingtu creator data, BRF batches sourced from sheets, name-matched fills, multi-platform research, and resumable sheet/document pipelines. Do not use for an isolated edit to one already-known document when no sheet, research, or pipeline state is involved.
 ---
 
 # Research Sheet Pipeline
 
-Build the shortest safe chain. Skip supplied, completed, or unnecessary modules, and never repeat research because a downstream transport failed.
+Default to the fixed fast path. Adapter count does not make a job complex.
 
-## Choose the path
+## Route once
 
-Modules: `scope`, `sheet_context`, `sheet_schema`, `web_research`, `normalize`, `document`, `sheet_create`, `sheet_writeback`, `verify`.
+| Data/action | Owner |
+|---|---|
+| POPO read/write | `$popo-sheet` in one `$kimi-webbridge` task session |
+| Bilibili video/creator data | bundled `scripts/bilibili_batch.py` |
+| Douyin/Xingtu data | `$douyin-xingtu` |
+| Documents or unknown providers | complex path |
 
-- Existing sheet + refresh/fill: `sheet_context -> web_research -> normalize -> sheet_writeback -> verify`.
-- Existing sheet + documents, no writeback: `sheet_context -> web_research -> normalize -> document -> verify`.
-- Existing sheet + documents + links: add `sheet_writeback` after `document`.
-- New table: `sheet_schema -> web_research -> normalize -> sheet_create -> sheet_writeback -> verify`.
-- Research only: `web_research -> normalize`.
-- Known records only: start at `normalize`.
-- Known document follow-up: `document -> verify`. If the URL and edits are already known and no upstream data is needed, use the designated document tool directly rather than re-reading a sheet or re-running research.
+Load selected companion skills. Do not load pipeline references for the fixed path.
 
-### Fast path
+Load `references/tool-routing.md` only for an unknown provider; `references/recipes.md` only for a
+named complex recipe; and `references/module-contracts.md` only for complex/resumable work,
+document side effects, or an unknown mutation result. For Xingtu writeback, also load its
+`references/output-contract.md`.
 
-Keep the plan in memory and skip the job manifest and `scripts/compose_chain.py` when all are true:
+## Fixed fast path
 
-1. At most five entities or documents.
-2. One sheet/tab at most, one template family, and one destination.
-3. No sheet creation or writeback.
-4. Identity, requested fields, edits, permission rule, and completion criteria are clear.
+Use this path for one input tab and one sheet destination when key, eligibility, targets, and write
+policy are deterministic; there is no document creation, new sheet, cross-session resume, or unknown
+write result.
 
-Read the shared sheet/template once, batch independent research, and process independent documents with concurrency 2–3 when the document tool supports it.
+Do not create a manifest, checkpoint, screenshot, or debug payload.
 
-Create a manifest from `assets/job-template.json` only for multiple destinations, mixed template families, sheet creation/writeback combined with documents, more than five documents, ambiguous business rules, or a job that must resume across sessions. Run `scripts/compose_chain.py` only for such jobs.
+### S0 — fresh sheet and full scope
 
-Read `references/tool-routing.md` before selecting tools. Read `references/module-contracts.md` before a document, sheet, permission, or other side effect. When documents are enabled, also read `references/document-providers.md`. Read `references/recipes.md` only when a listed recipe matches. Load the full instructions for every selected skill before action.
+1. Start one Kimi WebBridge task session.
+2. Open the supplied POPO URL with `newTab:true`; never mutate an old `只读`/`已离线` tab.
+3. Let `$popo-sheet` fetch one structured snapshot and enumerate every live data-row ID.
+4. Only after the complete enumeration, apply the structured eligibility predicate.
+5. Freeze each match as exact `row_id`, byte-for-byte `source_key`, platform, source URL/ID, targets,
+   and write policy.
 
-## Bound the run
+Required gate:
 
-- Preflight a selected route once. For Bilibili, run the script entry point `python scripts/bilibili_batch.py --self-test` with the configured workspace Python. If `python` is a Windows Store shim, resolve the bundled runtime first; do not test a global import that bypasses `.deps`.
-- For documents, run `python scripts/document_provider.py --format json`, repeating `--required-capability` for the job's exact capability list. Parse its JSON even when exit code 3 or 4 reports an unfinished preflight. Use a ready CLI or a capability-equivalent authenticated Agent connector. If credentials are missing, instruct the user to configure them locally; never request, print, or persist `FEISHU_APP_SECRET` in chat, manifests, or run artifacts.
-- Default budgets: tool preflight 60 seconds, POPO read-only acquisition 90 seconds total, one API batch 120 seconds, and one document transaction 120 seconds. On expiry, stop that route, preserve completed work, and choose at most one stated fallback.
-- If a shell call yields a cell ID, call `wait` immediately. Poll for at most 60 seconds at a time; after two no-progress waits, terminate it and use the bounded fallback.
-- Do not leave the user without a progress update for more than 60 seconds during active work.
-- For a fast-path job, prefer in-memory records. Otherwise store run artifacts under `.codex-runs/research-sheet-pipeline/<job-id>/`; keep only the canonical checkpoint, final change plan, and verification summary. Save debug payloads only on failure or request.
-- Return compact tool results: counts, keys/IDs, unmatched items, and errors. Avoid full workbook snapshots or full document block payloads in the conversation; target about 2 KB per entity/document when the tool permits.
-
-## Optimize before research
-
-1. Read only the named tab and the columns needed for filtering, identity, source URL, requested values, and key matching.
-2. Filter targets before opening pages or calling APIs.
-3. Deduplicate source URLs/IDs and research them in one batch.
-4. Use the fastest authoritative route from `references/tool-routing.md`; send only unresolved records to browser fallback.
-5. Normalize once, then fan out document work or build one sheet update.
-6. Perform one fresh, compact structural read-back per destination.
-
-Default evidence is source URL/ID, observation time, and returned source fields. Do not take one screenshot per entity unless requested, the field is UI-only, or visual evidence is needed to resolve identity/result ambiguity.
-
-## Preserve canonical records
-
-```json
-{
-  "key": "visible unique name or ID",
-  "aliases": [],
-  "fields": {},
-  "evidence": [{"url": "", "source_id": "", "observed_at": ""}],
-  "documents": [],
-  "status": "ready",
-  "errors": []
-}
+```text
+scanned_row_ids = live_data_row_ids
+scanned_data_rows = total_data_rows
+filter_after_full_scan = true
 ```
 
-Every writable record needs a unique key. Keep raw evidence separate from normalized fields. Leave missing values blank or unresolved; never invent them.
+Matches may be non-contiguous. Stop on partial scan, blank/duplicate exact key, duplicate row ID,
+missing header, or ambiguous policy.
 
-## Route Bilibili efficiently
+Policy vocabulary:
 
-Prefer the bundled `scripts/bilibili_batch.py` for public Bilibili data:
+- “刷新/更新为最新” → all eligible, overwrite named fields.
+- “补空/填缺失” → eligible blanks only, preserve non-empty fields.
+- “只处理这些名字” → named subset with the stated value policy.
 
-- Known video URLs/BV/AV IDs: `--input`.
-- Keyword video discovery: `--search`.
-- Known creator space URLs or UIDs in keyed objects: `--creator-input ... --recent N`.
-- Creator-name discovery: `--user-search`, then confirm name plus MID before creator lookup.
+### R — one batch per platform
 
-Keep concurrency at 2 by default. On `412`, retry once serially, then use the script's bounded user-search fallback; mark incomplete recent uploads as `partial`. Use `$kimi-webbridge` only for unresolved items, login/private state, UI-only fields, or an API failure after the bounded fallback. Never silently convert a whole creator batch into serial browser navigation.
+Partition frozen records by platform and run non-empty adapters in parallel. Each adapter gets one
+self-test and one batch; deduplicate canonical item IDs inside that batch.
 
-If `--self-test` reports a missing dependency, request permission once to install `requirements.txt`. The script prefers an ignored `.deps` directory when present and otherwise uses the configured Python environment; do not test a different interpreter.
+- Bilibili video URL/BV/AV: `scripts/bilibili_batch.py --input`.
+- Bilibili creator MID/space URL: `--creator-input`; name discovery: `--user-search`.
+- Douyin/Xingtu published item: `$douyin-xingtu published-items`.
+- Other authenticated source: one bounded `$kimi-webbridge` fallback.
 
-## Gate POPO reads and writes
+Normalize only into a comparison-only `join_key`. Merge results only by exact `source_key` and keep
+each record as `ready` or `blocked` with evidence/error. Never invent identity or discard one
+platform because another failed.
 
-Treat POPO acquisition, external research, and POPO writeback as independent stages. Preserve canonical research if POPO transport later fails.
+Before writeback, normalize adapter fields into the declared targets:
 
-For read-only or disposable-login links:
+| Canonical target | Bilibili result | Xingtu result |
+|---|---|---|
+| play count | `play_count` | `metrics.play_count` |
+| likes | `like_count` | `metrics.like_count` |
+| comments | `comment_count` | `metrics.comment_count` |
+| shares | `share_count` | `metrics.share_count` |
+| favorites | `favorite_count` | `metrics.favorite_count` |
+| publish time, only if requested | `pubdate` | `metrics.publish_time` |
 
-1. Reuse one existing authenticated session and one task tab.
-2. If `disposable_login_token=1`, never navigate the same URL a second time. Inspect or refresh the current tab once.
-3. Use at most two acquisition attempts and at most one task-created fresh session, within 90 seconds total.
-4. Do not cascade evaluate, snapshot, screenshots, and new tabs merely to confirm the same unavailable state.
-5. If still unavailable, continue independent research, preserve partial results, and request a renewed link only when sheet data is indispensable.
+For each record, every declared target must be present and non-null. Otherwise convert it to
+`blocked`; a five-field refresh never writes a `partial` four-field row or shifts values between
+columns.
 
-Before any write, run the write transport gate and bounded recovery in `references/module-contracts.md`. Build current-snapshot writes by live key; never reuse row IDs, column IDs, versions, or old-value preconditions after failure. One exact fresh read-back, not an acknowledgement, establishes completion.
+Do not rerun verified research because sheet transport later fails.
 
-## Process documents as transactions
+### S1 — one conditional write
 
-- Resolve and capability-check the document provider before reading the template. Treat a valid job manifest and a runnable provider as separate gates; never accept a legacy CLI's or connector's claimed capabilities without a local declaration or read-only probe.
-- Keep machine-specific commands in per-user config or environment variables. Accept legacy `tools.feishu_cli` as an explicit pinned command, but never publish or echo its path.
-- Read a shared template once and cache its structural signature for the run.
-- For each document, merge common and entity-specific replacements into one plan; use one dry-run, one grouped apply, and one compact read-back when the tool supports it. The bundled Feishu adapter applies at most 200 affected blocks in one idempotent batch and verifies content plus structure automatically.
-- Process independent documents with concurrency 2–3. Keep operations within one document ordered.
-- Capability-check non-text operations such as comments, images, permissions, or style changes before copying or editing.
-- Stop before mutation when a replacement crosses styled runs and the tool cannot preserve them safely; choose a block-level or style-aware operation rather than flattening the text.
-- Verify title, required facts, sharing state, and a structural signature: block type, nesting, order, style/list metadata, and non-text anchors. Equal block counts alone do not prove format preservation.
-- If no provider is ready, stop only `document`, preserve normalized records and evidence, and resume from that stage after setup.
+On the fresh task tab, `$popo-sheet` fetches a new snapshot, repeats the complete scan, and requires:
 
-## Write safely without repeating work
+```text
+live_eligible_keys - frozen_eligible_keys = empty
+frozen_eligible_keys - live_eligible_keys = empty
+```
 
-Immediately before sheet writeback:
+It then resolves current IDs/version and writes all ready records in one preconditioned batch.
+There is exactly one writer. On unknown acknowledgement, read actual state before one delta retry.
+If the bound tab has gone offline, `$popo-sheet` opens one fresh replacement instead of refreshing
+the stale page.
 
-1. Pass the platform transport gate.
-2. Fetch one fresh structured snapshot and resolve the live tab, headers, keys, row/column IDs, target values, and version.
-3. Stop on duplicate keys, shifted headers, read-only targets, or conflicting non-empty values unless overwrite was requested.
-4. Submit one batch with version and old-value preconditions.
-5. Read back exact planned key/value pairs; keep verified rows out of every retry.
-6. Rebuild from fresh state and retry only unexplained mismatches once.
+### S2 — full-scope verification
 
-## Verify and report
+From another fresh snapshot, repeat the full scan and compare every requested value for every frozen
+ready key.
 
-Completion requires zero unexplained mismatches in requested outputs. Screenshots are presentation checks, not value verification.
+Completion requires:
 
-Ask only when a missing platform, key, template, permission, duplicate, or overwrite rule would materially change the result. Otherwise infer visible conventions and continue.
+```text
+scanned_row_ids = live_data_row_ids
+eligible_keys_after = frozen_eligible_keys
+eligible = ready + blocked
+ready = changed + unchanged
+verified_ready = ready
+unexplained_mismatches = 0
+```
 
-Report target count, API successes, browser fallbacks, documents created/updated, sheet rows updated/skipped, verification result, elapsed-stage exceptions, and unresolved items. Keep implementation artifacts out of the final response unless useful for audit.
+The denominator comes from the live post-scan scope, never from the write-plan length. A zero-mismatch
+subset is not completion.
+
+## Complex path
+
+Use schema `3.0` manifest/checkpoint only for multiple input tabs/destinations, mixed document and
+sheet side effects, dynamic routing, sheet creation, more than five documents, cross-session resume,
+or an unknown mutation outcome.
+
+Then load `assets/job-template.json`, `scripts/compose_chain.py`, and only the matching complex
+references. Keep normal artifacts to `checkpoint.json`, final change plan, and verification summary.
+
+## Hard stops
+
+- Never filter after a fixed upper bound, `slice`, viewport sample, early `break`, or first matching
+  block.
+- Never use screenshots, OCR, row numbers, or normalized names as writable keys.
+- Never reuse an old offline/read-only POPO tab for mutation.
+- Never reconstruct owner-specific POPO/Xingtu transport in this pipeline.
+- Never start a second writer while the first result is unknown.
+- Never report completion from acknowledgement, screenshot, or subset verification.
+- Never persist credentials, disposable tokens, raw workbook snapshots, or unnecessary debug files.
+
+## Report
+
+Report total/scanned rows, frozen/live eligible count, platform batch counts, ready/blocked and
+changed/unchanged counts, rows/cells written, full readback result, and unresolved exact keys.
