@@ -1,0 +1,168 @@
+[
+  {
+    "id": "fast_readonly_brf_batch",
+    "prompt": "读取同一张 POPO 表中指定的 3 位 B站达人。表里有各自的 space URL；补充最近 5 条投稿信息，然后基于同一份飞书 BRF 模板各生成一份文档并设为所有人可编辑。不要回填表格。",
+    "expected": "走无 manifest 的只读快路径；POPO、模板各读一次；按 MID 批量研究；每份文档一次 dry-run/apply/readback；external deliverable_only；不再读取或写入 POPO。",
+    "must_not": [
+      "创建 job manifest",
+      "逐达人浏览器研究",
+      "写回 POPO",
+      "只用 block count 验格式",
+      "把内部推理写进 BRF"
+    ]
+  },
+  {
+    "id": "isolated_known_document_handoff",
+    "prompt": "这份飞书文档 URL 已经确定。只修改两个指定段落，不需要表格或外部研究。",
+    "expected": "判定为 research-sheet-pipeline 触发范围之外，交给指定文档 skill/provider；若存在 pipeline checkpoint，才从 document 阶段恢复。",
+    "must_not": [
+      "读取 POPO",
+      "外部研究",
+      "为孤立文档创建 pipeline manifest"
+    ]
+  },
+  {
+    "id": "fresh_popo_tab_recovery",
+    "prompt": "当前已经打开的 POPO 页面显示只读、已离线；原始链接带 disposable_login_token=1。请继续做执行 Sheet 的指标刷新，同时按已知 B站 space UID 获取最近 5 条投稿。",
+    "expected": "不借用或刷新旧页；在同一任务 session 用原始 URL newTab:true 新开页面并结构化全表扫描；写前或回读前若该任务页后来掉线，再开一个 fresh replacement 而不是刷新旧页；replacement 仍失败则停止 sheet 阶段并继续独立 creator-input 批处理。",
+    "must_not": [
+      "继续使用只读或离线旧页",
+      "反复刷新旧页",
+      "无限连续新开 POPO 标签",
+      "把 UID 当 aid",
+      "重做已完成研究",
+      "重建 ShareDB/WebSocket"
+    ]
+  },
+  {
+    "id": "noncontiguous_scope_full_scan",
+    "prompt": "执行 Sheet 有 136 个数据行。发布节点=7.23、进度=已发布且发布链接非空的记录分布在行 3-12 和行 42-44；刷新这些达人的五项主平台指标。",
+    "expected": "先枚举并扫描全部 136 个结构化数据行 ID，再过滤；冻结 13 个精确 source_key 和内部 row ID；按平台批量研究；写前和写后都重新全表扫描；最终报告 13/13。",
+    "must_not": [
+      "只读第一个连续日期区块",
+      "过滤前 slice 或限制前 40 行",
+      "遇到其他日期后 break",
+      "只冻结 10 位",
+      "用 10 行写计划的 mismatches=0 宣称全量完成"
+    ]
+  },
+  {
+    "id": "douyin_xingtu_refresh",
+    "prompt": "读取执行 Sheet 中已发布的抖音记录，通过星图回收发布日期、播放、点赞、评论和分享并回填。达人名包含中英文和数字混排。",
+    "expected": "结构化读取并逐字保留 source_key；批量 item_id；使用 douyin-xingtu；按 item/author/star 身份证据；显式映射 metrics.play_count/like_count/comment_count/share_count 到目标列；任一请求字段缺失只阻塞该字段，其他 exact ready 字段继续写；身份冲突才整行 blocked；按行和字段全量覆盖核验。",
+    "must_not": [
+      "用截图或 OCR 转写达人名",
+      "点击达人卡片逐个采集",
+      "按模糊昵称选第一个候选",
+      "写入 conflict/ambiguous",
+      "因一个指标缺失跳过同一行其他已确认指标",
+      "POPO 失败后重跑星图"
+    ]
+  },
+  {
+    "id": "distribution_field_level_blocking",
+    "prompt": "刷新执行 Sheet 的抖音、B站、小红书、快手播放量。某达人有小红书分发链接但页面无法读取，抖音和快手已成功拿到；没有分发的平台按规则填0。",
+    "expected": "按目标单元格独立记录 ready/not_distributed/blocked；小红书有链接但不可读只阻塞小红书并保留原值；抖音和快手照常写入；确认无分发的平台写0；写前后全表扫描并按行+平台列核验，报告 blocked 的精确达人和列。",
+    "must_not": [
+      "把整行标记 blocked",
+      "丢弃已确认的抖音或快手数据",
+      "把有链接但不可读的小红书填0",
+      "只报告达人级 ready/blocked",
+      "只核验实际写入的子集"
+    ]
+  },
+  {
+    "id": "refresh_overwrites_stale_values",
+    "prompt": "把执行表所有符合条件的 B站和抖音播放量刷新到最新。部分单元格已有旧值，也必须更新。",
+    "expected": "冻结 refresh_existing + all_eligible + overwrite；研究所有符合条件的记录；已有非空值不得导致跳过；按字段以 eligible_fields=ready_fields+not_distributed_fields+blocked_fields、writable_fields=changed_fields+unchanged_fields 和 verified_ready_fields=ready_fields+not_distributed_fields 核验。",
+    "must_not": [
+      "把范围缩成 blank_only",
+      "保留旧非空值",
+      "只核验写计划",
+      "宣称子集零 mismatch 即完成"
+    ]
+  },
+  {
+    "id": "exact_mixed_key_customer_reconciliation",
+    "prompt": "把主执行表的结果同步到客户表，达人名包括 上海滩许Van强、与山0v0。必须按达人名匹配；找不到的明确列出。",
+    "expected": "source_key 来自结构化主表并逐字保留；join_key 只用于候选比较；先输出 exact/normalized/missing/duplicate/ambiguous reconciliation；只自动写 exact unique。",
+    "must_not": [
+      "把 Van 改成 VFan",
+      "把 0v0 改成 00",
+      "用截图/OCR 作为主键",
+      "按当前选中行粘贴",
+      "把 join_key 写回"
+    ]
+  },
+  {
+    "id": "mixed_templates_destinations_resume",
+    "prompt": "从两个 tab 筛选 12 位 B站/抖音达人，按项目类型使用两套飞书模板，输出到两个目的地并回填链接；任务必须可跨会话恢复。",
+    "expected": "创建 schema 3.0 manifest；用 sheet.tabs 分别声明两个输入 tab；tool plan 同时包含 Bilibili 与 Douyin/Xingtu；使用 templates{}、destinations[]、project_type routing_rules 和 exactly-one/blocked routing_policy；以 checkpoint_status=new 初始化完整状态；跨会话时以 resuming 状态校验 contract/checkpoint/skill/source hashes、adapter versions、frozen_source_keys 与完整 canonical records 的一一覆盖、stage/attempt/destination/verified proofs 和首个未验证 resume_from；compose_chain 验证条件字段、tab refs、模板一致性、引用和重复键。",
+    "must_not": [
+      "把多模板塞进单个 template 字符串",
+      "检测到星图后漏掉 B站 adapter",
+      "把 tabs 当成未校验扩展字段",
+      "忽略 destinations",
+      "跨会话重做 verified stage",
+      "只保存自然语言进度",
+      "用 schema 2.0 恢复副作用任务"
+    ]
+  },
+  {
+    "id": "mixed_metric_link_write_policies",
+    "prompt": "同一批已发布记录要把播放量刷新到最新，同时生成 BRF 并回填链接；播放量必须覆盖旧值，但 BRF 链接要保留旧链接和新链接。",
+    "expected": "同一 schema 3.0 job 使用全局 refresh_existing+overwrite 作为播放量默认策略，并用 field_policies.document_link=merge_existing+merge 覆盖链接字段；用 destination target_fields 分配字段并统一 checkpoint/coverage。",
+    "must_not": [
+      "把两个字段强行使用同一 existing_values",
+      "悄悄丢弃旧链接",
+      "为规避 schema 创建无关联的重复研究任务",
+      "只验证其中一种写回"
+    ]
+  },
+  {
+    "id": "unknown_document_timeout_single_writer",
+    "prompt": "飞书模板复制命令超时，无法确认是否仍在后台执行。恢复时不要产生重复标题或重复段落。",
+    "expected": "原进程仍存活时保持 running，否则标记 unknown；两者都持久化 writer_count=1、owner、idempotency key、process state 并要求 checkpoint resume，计划不可继续写；等待/终止原进程并 fresh readback；已有目标状态时释放 writer，以 process_state=ended、actual_state_checked=true 和非空 proof 标记 verified，否则只补 remaining delta 一次。",
+    "must_not": [
+      "立即启动第二个 writer",
+      "把 timeout 当作未写入",
+      "盲目重放整批",
+      "只看 block count"
+    ]
+  },
+  {
+    "id": "external_brf_clean_delivery",
+    "prompt": "根据调研生成面向达人的正式 BRF。修改方向可以参考内部分析，但文档不能出现内部推理、任务要求或调试说明。",
+    "expected": "documents.audience=external 且 content_policy=deliverable_only；内部理由留在 change plan/checkpoint；apply 前后检查受众内容与结构。",
+    "must_not": [
+      "把为什么这么改写进 BRF",
+      "复制用户约束到正文",
+      "保留占位说明",
+      "泄露调试/恢复过程"
+    ]
+  },
+  {
+    "id": "checkpoint_artifact_privacy",
+    "prompt": "这个任务要跨会话恢复。请保留最小运行产物；调试数据里可能有 disposable_login_token、Cookie、邮箱和内部 session ID。",
+    "expected": "强制 redact_sensitive=true 且 checkpoint 文件名固定；checkpoint_artifacts.py 只接受 compose-valid schema 3.0 完整状态，递归清理结构化字段、URL query、自由文本凭据、邮箱和私钥后原子写 checkpoint.json；若 exact source_key 本身敏感则失败关闭；minimal 只允许三个文件且扫描其内容，debug 同时扫描内容、执行文件上限和保留期检查；不自动删除。",
+    "must_not": [
+      "允许关闭脱敏",
+      "直接覆盖 checkpoint 导致半写文件",
+      "在 minimal 模式保留截图或原始 payload",
+      "打印或持久化令牌、Cookie、邮箱或内部 ID",
+      "未经用户授权删除调试文件"
+    ]
+  },
+  {
+    "id": "bilibili_full_metrics_shortlink_exact_key",
+    "prompt": "执行表里有 4 位 B站达人，其中两条发布链接是 b23.tv 短链。按表内原始达人名刷新 3 日播放、点赞、评论、分享和收藏。",
+    "expected": "逐字保留 source_key；每个 b23.tv 短链最多解析一次；按 BVID + owner MID 验证身份；从视频详情 stat 返回 play/like/reply/share/favorite；只写 exact ready 字段，缺失指标只阻塞对应字段，并完整回读五个字段范围。",
+    "must_not": [
+      "把 URL 当作 source_key",
+      "把短链直接判为永久 invalid",
+      "只返回播放和弹幕",
+      "按 OCR 或行号写回",
+      "只核验部分指标"
+    ]
+  }
+]

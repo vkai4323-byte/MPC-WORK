@@ -1,17 +1,30 @@
 # MPC-WORK
 
-Reusable workflow skills and supporting resources.
+Complete creator-research and spreadsheet-writeback framework.
 
-## Skills
+## Three composable Skills
 
-- [`research-sheet-pipeline`](skills/research-sheet-pipeline/): API-first research, normalization, portable Feishu document providers, and spreadsheet writeback with POPO and authenticated-browser fallbacks.
-- [`douyin-xingtu`](skills/douyin-xingtu/): authenticated, read-only Xingtu retrieval for Douyin publications, creator identity, metrics, pricing, rankings, content, and task reports.
+- [`research-sheet-pipeline`](skills/research-sheet-pipeline/): freezes exact sheet scope, routes
+  platform research, coordinates Feishu documents, and performs guarded field-level writeback.
+- [`popo-sheet`](skills/popo-sheet/): reads and writes POPO sheets through ShareDB with exact internal
+  IDs, `init`-gated requests, staged timeout diagnostics, and full structural verification.
+- [`douyin-xingtu`](skills/douyin-xingtu/): authenticated, read-only Xingtu retrieval for Douyin
+  publications, creator identity, metrics, pricing, rankings, content, and task reports.
 
-See [HANDOFF.md](HANDOFF.md) for architecture, validation, operating constraints, and continuation guidance.
+## Included integrations
 
-The skill bundles a credential-free Feishu Python adapter and auto-detects compatible per-user CLIs. Feishu App credentials remain outside the repository and are never stored in job manifests.
+- Feishu skill/provider layer: `feishu-cli.md`, `document-providers.md`, `document_provider.py`, and
+  the credential-free compatibility adapter `feishu_doc.py`.
+- Bilibili API layer: `bilibili_batch.py` with the dependencies declared in
+  `skills/research-sheet-pipeline/requirements.txt`.
 
-Use Python 3.10+ and install its Bilibili dependencies with:
+Credentials, browser sessions, `.deps`, raw workbooks, checkpoints, and production results are not
+included.
+
+See [HANDOFF.md](HANDOFF.md) for architecture, validation commands, field-level blocking rules, and
+operating constraints.
+
+Use Python 3.10+ and install Bilibili dependencies with:
 
 ```bash
 pip install -r skills/research-sheet-pipeline/requirements.txt

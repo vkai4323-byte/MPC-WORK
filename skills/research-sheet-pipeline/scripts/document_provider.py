@@ -18,8 +18,66 @@ BUNDLED_CAPABILITIES = [
     "document.update",
     "document.readback",
     "document.structure.read",
+    "spreadsheet.read",
+    "spreadsheet.structure.read",
+    "spreadsheet.write",
     "permission.public.read",
     "permission.public.anyone_editable",
+]
+OFFICIAL_LARK_CLI_CAPABILITIES = [
+    "schema.read",
+    "openapi.raw",
+    "document.resolve",
+    "document.read",
+    "document.create",
+    "document.update",
+    "document.copy",
+    "document.readback",
+    "document.structure.read",
+    "document.history",
+    "document.media",
+    "spreadsheet.read",
+    "spreadsheet.create",
+    "spreadsheet.write",
+    "spreadsheet.structure.read",
+    "spreadsheet.style",
+    "spreadsheet.validation",
+    "spreadsheet.filter",
+    "spreadsheet.chart",
+    "spreadsheet.history",
+    "spreadsheet.import",
+    "spreadsheet.export",
+    "wiki.read",
+    "wiki.create",
+    "wiki.update",
+    "wiki.copy",
+    "wiki.move",
+    "wiki.delete",
+    "drive.read",
+    "drive.search",
+    "drive.upload",
+    "drive.download",
+    "drive.import",
+    "drive.export",
+    "drive.comment",
+    "drive.permission",
+    "markdown.read",
+    "markdown.create",
+    "markdown.update",
+    "mindnote.read",
+    "mindnote.update",
+    "whiteboard.read",
+    "whiteboard.update",
+    "slides.read",
+    "slides.create",
+    "slides.update",
+    "bitable.read",
+    "bitable.create",
+    "bitable.update",
+    "permission.member.read",
+    "permission.member.update",
+    "permission.public.read",
+    "permission.public.update",
 ]
 CONFIG_ENV = "RESEARCH_SHEET_PIPELINE_CONFIG"
 CLI_ENV = "FEISHU_DOC_CLI"
@@ -218,7 +276,7 @@ def resolve_cli(
         if document_config.get("command") and not explicit_config:
             candidates.append(("local-config", document_config["command"], config_dir))
 
-        for executable in ("feishu-doc", "feishu-doc-cli", "feishu-doc.ps1"):
+        for executable in ("lark-cli", "lark-cli.cmd", "feishu-doc", "feishu-doc-cli", "feishu-doc.ps1"):
             found = shutil.which(executable)
             if found:
                 candidates.append(("path", found, None))
@@ -232,7 +290,37 @@ def resolve_cli(
         if not command_exists(command, origin):
             continue
         is_bundled = source == "bundled"
-        if is_bundled:
+        executable_name = Path(command[0]).stem.lower() if command else ""
+        is_official_lark_cli = executable_name == "lark-cli"
+        if is_official_lark_cli:
+            capabilities = OFFICIAL_LARK_CLI_CAPABILITIES
+            missing_capabilities = [item for item in required if item not in capabilities]
+            try:
+                probe = subprocess.run(
+                    [*command, "doctor"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    shell=False,
+                )
+                doctor_payload = json.loads(probe.stdout) if probe.stdout.strip() else {}
+                doctor_ready = probe.returncode == 0 and doctor_payload.get("ok") is True
+            except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+                doctor_ready = False
+            credentials = {
+                "status": "present" if doctor_ready else "unavailable",
+                "source": "official-cli",
+            }
+            if missing_capabilities:
+                status = "capability_mismatch"
+            elif doctor_ready:
+                status = "ready"
+            else:
+                status = "needs_credentials"
+        elif is_bundled:
             capabilities = BUNDLED_CAPABILITIES
             missing_capabilities = [item for item in required if item not in capabilities]
             credentials = credential_state()
@@ -249,14 +337,14 @@ def resolve_cli(
             status = "legacy_unverified"
         return {
             "status": status,
-            "provider": "feishu-cli",
+            "provider": "lark-cli" if is_official_lark_cli else "feishu-cli",
             "source": source,
-            "provider_ref": f"{source}:feishu-cli",
+            "provider_ref": f"{source}:{'lark-cli' if is_official_lark_cli else 'feishu-cli'}",
             "credentials": credentials,
             "capabilities": capabilities,
             "required_capabilities": required,
             "missing_capabilities": missing_capabilities,
-            "capability_check": "complete" if is_bundled else "required",
+            "capability_check": "complete" if is_bundled or is_official_lark_cli else "required",
             "user_action": (
                 None
                 if status == "ready"
@@ -264,6 +352,8 @@ def resolve_cli(
                 if status == "legacy_unverified"
                 else "Select a provider that supports every required document capability."
                 if status == "capability_mismatch"
+                else "Run lark-cli configuration and verify it with lark-cli doctor."
+                if is_official_lark_cli
                 else (
                     "Configure FEISHU_APP_ID and FEISHU_APP_SECRET locally via environment, "
                     "FEISHU_ENV_FILE, or the documented per-user secret file. Never paste the secret into chat."
@@ -413,7 +503,7 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
             "capability_check": "required",
             "user_action": "The Agent must verify the connected provider exposes every required capability before mutation.",
         }
-    if provider not in {"auto", "feishu", "feishu-cli"}:
+    if provider not in {"auto", "feishu", "feishu-cli", "lark-cli"}:
         return {
             "status": "unsupported_provider",
             "provider": provider,
@@ -549,7 +639,7 @@ def self_test() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Resolve the document provider for research-sheet-pipeline.")
-    parser.add_argument("--provider", choices=("auto", "feishu", "feishu-cli", "connector", "none"))
+    parser.add_argument("--provider", choices=("auto", "feishu", "feishu-cli", "lark-cli", "connector", "none"))
     parser.add_argument("--command", help="Explicit CLI path or command. Prefer a local config or environment variable.")
     parser.add_argument("--pin", action="store_true", help="Fail closed if the explicit command is unavailable.")
     parser.add_argument("--connector", help="Agent connector/provider name selected outside this script.")

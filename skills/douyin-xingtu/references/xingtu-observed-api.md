@@ -1,15 +1,16 @@
 # Observed Xingtu read-only surfaces
 
-Observed against the authenticated advertiser market on 2026-07-24. These are internal web endpoints, not a public compatibility guarantee. Repair the bundled client when schemas change; do not improvise write endpoints.
+Observed against the authenticated advertiser creator index on 2026-07-27. These are internal web endpoints, not a public compatibility guarantee. Repair the bundled client when schemas change; do not improvise write endpoints.
 
 ## Stable entry
 
-- Use `https://www.xingtu.cn/ad/creator/market`.
-- `/ad/creator/index` may redirect to the public landing page.
+- Use `https://www.xingtu.cn/ad/creator/index`.
+- Do not treat a generic Xingtu homepage or the legacy `/ad/creator/market` route as query-ready.
+- Require the creator search control (`达人昵称` / `抖音号` / `星图ID`) before starting a batch.
 
 ## Creator search
 
-- The market page submits `POST /gw/api/gsearch/search_for_author_square`.
+- The creator index submits `POST /gw/api/gsearch/search_for_author_square`.
 - `GET /gw/api/gsearch/search_intent_authors` reports whether a query is semantically consistent.
 - Search responses may include `star_id`, `core_user_id`, `nick_name`, followers, labels, prices, expected plays, CPM/CPE, interaction/completion metrics, indices, representative items, and `last_10_items`.
 - A name query can return unrelated or imitation accounts. Never select by result position.

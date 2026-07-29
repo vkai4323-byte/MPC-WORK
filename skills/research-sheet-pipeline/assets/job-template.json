@@ -1,11 +1,22 @@
 {
+  "schema_version": "3.0",
   "job_id": "replace-me",
   "objective": "Describe the desired outcome",
+  "scope": {
+    "selection": "all_eligible",
+    "eligibility_source": "Describe the sheet columns or user rule that defines eligibility",
+    "source_key_policy": "exact_structured"
+  },
   "entities": [],
+  "routing_policy": {},
+  "routing_rules": [],
+  "templates": {},
+  "destinations": [],
   "tools": {
     "browser_skill": "kimi-webbridge",
     "sheet_skill": "popo-sheet",
     "bilibili_script": "scripts/bilibili_batch.py",
+    "xingtu_skill": "douyin-xingtu",
     "document_provider": {
       "platform": "feishu",
       "mode": "auto"
@@ -17,35 +28,71 @@
     "url": "",
     "sheet_name": "",
     "key": "",
+    "tabs": [],
     "columns": []
   },
   "research": {
     "enabled": true,
     "fields": [],
     "sources": [],
-    "evidence": "url+source_id+observed_at"
+    "evidence": "url+source_id+source_field+observed_at"
   },
   "documents": {
     "mode": "none",
     "system": "feishu",
     "template": "",
     "link_column": "",
-    "permission": ""
+    "permission": "",
+    "audience": "external",
+    "content_policy": "deliverable_only"
   },
   "writeback": {
     "mode": "none",
-    "target_columns": []
+    "intent": "audit_only",
+    "existing_values": "preserve",
+    "target_columns": [],
+    "field_policies": {}
   },
   "verification": {
     "readback": true,
-    "visual": false
+    "visual": false,
+    "coverage": true
   },
   "execution": {
     "artifact_dir": ".codex-runs/research-sheet-pipeline/replace-me",
+    "artifact_mode": "minimal",
+    "resume": "checkpoint",
+    "checkpoint_file": "checkpoint.json",
+    "debug_retention_days": 7,
+    "max_debug_files": 20,
+    "redact_sensitive": true,
     "preflight_seconds": 60,
     "popo_read_seconds": 90,
     "api_batch_seconds": 120,
     "document_transaction_seconds": 120,
     "fallbacks_per_stage": 1
+  },
+  "state": {
+    "checkpoint_status": "new",
+    "contract_hash": "",
+    "skill_snapshot": {
+      "commit": "",
+      "hash": ""
+    },
+    "adapter_versions": {},
+    "source_snapshot": {
+      "ref": "",
+      "hash": "",
+      "observed_at": ""
+    },
+    "resume_from": "",
+    "checkpoint_hash": "",
+    "stage_state": {},
+    "attempts": {},
+    "frozen_source_keys": [],
+    "records": [],
+    "destination_state": {},
+    "verified_outputs": {},
+    "unexplained_mismatches": []
   }
 }

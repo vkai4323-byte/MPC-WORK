@@ -1,6 +1,16 @@
 # Portable document providers
 
-Read this reference whenever `documents.mode` is `create` or `update`.
+Read this reference whenever a task touches any Feishu online document or `documents.mode` is
+`create` or `update`. Also read `feishu-cli.md`.
+
+## Contents
+
+- Resolve a provider
+- Keep local overrides outside the skill
+- Configure Feishu credentials safely
+- One writer and unknown outcomes
+- Audience-facing content
+- Preserve completed work
 
 ## Resolve a provider
 
@@ -14,9 +24,22 @@ For a manifest job, repeat `--required-capability <name>` for every capability e
 
 Use Python 3.10 or newer. If `python` is a Windows Store shim, use the workspace-bundled Python.
 
-Resolution order is an explicit `--command`, an explicitly selected config, `FEISHU_DOC_CLI`, per-user local config, a compatible command on `PATH`, then the bundled `scripts/feishu_doc.py`. Relative commands in a config resolve from that config file's directory. The resolver returns only a logical provider reference and never exposes its path or argv. The script cannot inspect an Agent's connector catalog; when it returns `needs_credentials` or `unavailable`, capability-check an authenticated document connector exposed to the Agent before asking the user to configure app credentials locally.
+Resolution order is an explicit `--command`, an explicitly selected config, `FEISHU_DOC_CLI`,
+per-user local config, the official `lark-cli` on `PATH`, another compatible command on `PATH`,
+then the bundled `scripts/feishu_doc.py`. Relative commands in a config resolve from that config
+file's directory. The resolver returns only a logical provider reference and never exposes its
+path or argv.
 
-Accept a provider only when it supports the required subset of: resolve, copy, raw/read, block read, grouped replacement with dry-run, permission read/update, exact read-back, and structural signature. Do not substitute browser editing for a missing provider.
+Accept a provider only when it supports the required subset across Docs, Sheets, Wiki, Drive,
+Base, Slides, permissions, import/export, comments, history, and media. Tool presence does not
+prove the active identity has the necessary scope or target ACL. Do not substitute browser access
+for a missing CLI capability or permission.
+
+For spreadsheet work, use the official `sheets` domain. Start with `+workbook-info`, select a
+returned exact `sheet_id`, and use `+csv-get`, `+cells-get`, or `+table-get` according to the data
+needed. Prefer `+batch-update` for related writes and perform exact readback. Use the bundled
+`sheet-*` commands only as a compatibility fallback when their safety contract is required and the
+official route is unavailable.
 
 ## Keep local overrides outside the skill
 
@@ -31,17 +54,24 @@ Example:
 ```json
 {
   "document": {
-    "provider": "feishu-cli",
-    "command": "feishu-doc"
+    "provider": "lark-cli",
+    "command": "lark-cli"
   }
 }
 ```
 
 The legacy manifest field `tools.feishu_cli` remains accepted as an explicit pinned command. Pass it to the resolver with `--command ... --pin` without echoing it; a missing pinned command fails closed. Do not put machine-specific paths in the distributed job template.
 
-An external legacy CLI may keep its existing private credential mechanism, including a keychain or authenticated session. It is always `legacy_unverified`: the resolver does not assume its credential names or capabilities. Treat only capabilities established by an explicit Agent-side declaration or read-only preflight as available, and never emit paths or credential values.
+The official CLI is accepted only when `doctor` reports healthy configuration and identity
+availability. It keeps credentials in its own protected profile and its feature surface is
+declared by the resolver. Other external CLIs remain `legacy_unverified`; never emit paths or
+credential values.
 
 ## Configure Feishu credentials safely
+
+Prefer the official CLI's `config init`, protected profile, `doctor`, `whoami`, and explicit
+`--as bot|user` identity controls. Never print its profile contents. A healthy `doctor` result does
+not prove every domain scope or resource ACL; perform one exact read-only preflight before writes.
 
 The bundled adapter reads only `FEISHU_APP_ID` and `FEISHU_APP_SECRET` from the process environment or, in order, from:
 
@@ -76,7 +106,35 @@ Run a resolved provider without revealing its locator:
 python scripts/document_provider.py --run -- resolve "https://example.feishu.cn/wiki/TOKEN"
 ```
 
-An external legacy CLI is reported as `legacy_unverified`; perform one read-only resolve/raw preflight before mutation. The bundled adapter supports `FEISHU_REGION=feishu|lark`. Its grouped text replacement uses one idempotent Feishu batch update for at most 200 affected blocks, then verifies exact content and an inline-style-aware structural signature. If it reports `apply_status: unknown` or failed read-back, inspect the target first and resume from verification; never blindly replay the batch. Public-anyone editing additionally requires `--confirm-file-token` matching the exact target and always performs a permission read-back.
+An external legacy CLI is reported as `legacy_unverified`; perform one read-only resolve/raw preflight before mutation. The bundled adapter supports `FEISHU_REGION=feishu|lark`. Its grouped text replacement uses one idempotent Feishu batch update for at most 200 affected blocks, then verifies exact content and an inline-style-aware structural signature. Public-anyone editing additionally requires `--confirm-file-token` matching the exact target and always performs a permission read-back.
+
+## One writer and unknown outcomes
+
+Before mutation, assign one writer owner and one idempotency key to the destination. No other process, task turn, or fallback may mutate that destination until the owner reaches `verified`, `blocked`, or a freshly observed safe-to-retry state.
+
+If a command times out, exits without a conclusive read-back, or reports `apply_status: unknown`:
+
+1. retain `running` while the original process is live; otherwise record `unknown`; both require `writer_count=1`, writer owner, idempotency key, process state, and `actual_state_checked=false`;
+2. retain the writer lock;
+3. wait for or terminate the original process so it cannot continue in the background;
+4. resolve/read the target from fresh state;
+5. compare intended content, structural signature, and permission;
+6. release the writer and mark verified only when the intended post-state is already present, with `process_state=ended`, `actual_state_checked=true`, and a non-empty readback proof;
+7. otherwise compute only the remaining delta and retry once with fresh preconditions/idempotency.
+
+Never start a recovery writer while the original process or outcome is unresolved. A timeout is not proof that no mutation occurred.
+
+## Audience-facing content
+
+For `documents.audience=external`, require `documents.content_policy=deliverable_only`. Before apply and again after read-back, reject:
+
+- internal reasoning or strategy notes;
+- task instructions, constraints, or acceptance criteria;
+- debugging/recovery commentary;
+- placeholders that describe what content should exist;
+- copied prompt text or change-plan language.
+
+Keep those details only in the manifest/checkpoint/change plan. The document itself must contain only audience-facing material.
 
 ## Preserve completed work
 

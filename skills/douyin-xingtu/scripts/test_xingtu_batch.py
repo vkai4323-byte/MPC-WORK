@@ -52,6 +52,105 @@ class FakeClient:
         }
 
 
+class FakeMarketClient:
+    def __init__(self, tabs, states):
+        self.tabs = tabs
+        self.states = iter(states)
+        self.calls = []
+        self.evaluated_code = []
+
+    def call(self, action, args=None):
+        self.calls.append((action, args or {}))
+        if action == "list_tabs":
+            return {"tabs": self.tabs}
+        return {}
+
+    def evaluate_json(self, code):
+        self.evaluated_code.append(code)
+        return next(self.states)
+
+
+class MarketReadinessTests(unittest.TestCase):
+    def test_old_market_route_is_replaced_before_ready_check(self):
+        client = FakeMarketClient(
+            [{"url": "https://www.xingtu.cn/ad/creator/market"}],
+            [{"on_creator_index": True, "login_required": False, "search_ready": True}],
+        )
+        state = xingtu.WebBridge.ensure_market(client)
+        self.assertTrue(state["search_ready"])
+        self.assertIn(
+            ("navigate", {"url": xingtu.MARKET_URL, "newTab": False}),
+            client.calls,
+        )
+
+    def test_no_existing_tab_opens_creator_index_in_new_tab(self):
+        client = FakeMarketClient(
+            [],
+            [{"on_creator_index": True, "login_required": False, "search_ready": True}],
+        )
+        xingtu.WebBridge.ensure_market(client)
+        navigate = [call for call in client.calls if call[0] == "navigate"][0]
+        self.assertEqual(navigate[1]["url"], xingtu.MARKET_URL)
+        self.assertTrue(navigate[1]["newTab"])
+
+    def test_delayed_search_control_becomes_ready(self):
+        client = FakeMarketClient(
+            [{"url": xingtu.MARKET_URL}],
+            [
+                {"on_creator_index": True, "login_required": False, "search_ready": False},
+                {"on_creator_index": True, "login_required": False, "search_ready": True},
+            ],
+        )
+        with patch.object(xingtu.time, "sleep"):
+            state = xingtu.WebBridge.ensure_market(client)
+        self.assertTrue(state["search_ready"])
+
+    def test_missing_visible_control_is_page_not_ready_not_auth_error(self):
+        client = FakeMarketClient(
+            [{"url": xingtu.MARKET_URL}],
+            [
+                {"on_creator_index": True, "login_required": False, "search_ready": False}
+            ] * 12,
+        )
+        with patch.object(xingtu.time, "sleep"):
+            with self.assertRaisesRegex(xingtu.XingtuError, "^page_not_ready:"):
+                xingtu.WebBridge.ensure_market(client)
+        self.assertIn("getBoundingClientRect", client.evaluated_code[0])
+        self.assertIn("!e.disabled", client.evaluated_code[0])
+
+    def test_login_redirect_is_auth_required(self):
+        client = FakeMarketClient(
+            [{"url": xingtu.MARKET_URL}],
+            [
+                {"on_creator_index": False, "login_required": True, "search_ready": False}
+            ] * 12,
+        )
+        with patch.object(xingtu.time, "sleep"):
+            with self.assertRaisesRegex(xingtu.XingtuError, "^auth_required:"):
+                xingtu.WebBridge.ensure_market(client)
+
+    def test_logged_in_homepage_is_page_not_ready_not_auth_error(self):
+        client = FakeMarketClient(
+            [{"url": xingtu.MARKET_URL}],
+            [
+                {"on_creator_index": False, "login_required": False, "search_ready": False}
+            ] * 12,
+        )
+        with patch.object(xingtu.time, "sleep"):
+            with self.assertRaisesRegex(xingtu.XingtuError, "^page_not_ready:"):
+                xingtu.WebBridge.ensure_market(client)
+
+
+class FetchAuthenticationTests(unittest.TestCase):
+    def test_http_401_is_auth_required(self):
+        class Client:
+            def evaluate_json(self, _code):
+                return {"ok": False, "status": 401, "body_text": ""}
+
+        with self.assertRaisesRegex(xingtu.XingtuError, "^auth_required:"):
+            xingtu.WebBridge.fetch_json(Client(), "/test")
+
+
 class CandidateSelectionTests(unittest.TestCase):
     def test_item_in_representative_items_disambiguates_creator(self):
         records = [

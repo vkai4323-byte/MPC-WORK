@@ -20,7 +20,7 @@ from typing import Any, Iterable
 
 
 DAEMON_URL = "http://127.0.0.1:10086/command"
-MARKET_URL = "https://www.xingtu.cn/ad/creator/market"
+MARKET_URL = "https://www.xingtu.cn/ad/creator/index"
 ITEM_ENDPOINT = "/gw/api/data_sp/external_multi_get_item"
 RANKING_ENDPOINT = "/gw/api/gsearch/get_ranking_list_data"
 TASK_REPORT_ENDPOINT = "/gw/api/data_sp/project_task_report_info"
@@ -68,23 +68,57 @@ class WebBridge:
         if xingtu_tabs:
             selected = xingtu_tabs[-1]
             self.call("find_tab", {"url": selected["url"]})
-            if "/ad/creator/" not in str(selected.get("url", "")):
+            if "/ad/creator/index" not in str(selected.get("url", "")):
                 self.call("navigate", {"url": MARKET_URL, "newTab": False})
         else:
             self.call(
                 "navigate",
                 {"url": MARKET_URL, "newTab": True, "group_title": "抖音星图数据"},
             )
-        state = self.evaluate_json(
-            """(()=>JSON.stringify({
-                href:location.href,
-                title:document.title,
-                authenticated:/\\/ad\\/creator\\//.test(location.pathname)
-            }))()"""
-        )
-        if not state.get("authenticated"):
+        state: dict[str, Any] = {}
+        for attempt in range(12):
+            evaluated = self.evaluate_json(
+                """(()=>{
+                    const visible=e=>{
+                        const r=e.getBoundingClientRect();
+                        const s=getComputedStyle(e);
+                        return !e.disabled&&!e.hidden&&r.width>0&&r.height>0
+                            &&s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';
+                    };
+                    const loginPath=/(^|\\/)(login|passport|sso)(\\/|$)/i.test(location.pathname)
+                        ||/(^|\\.)(passport|sso)\\./i.test(location.hostname);
+                    const loginControl=[...document.querySelectorAll('a,button')]
+                        .some(e=>visible(e)&&/^(登录|立即登录)$/.test((e.textContent||'').trim()));
+                    return JSON.stringify({
+                        href:location.href,
+                        title:document.title,
+                        on_creator_index:location.pathname==='/ad/creator/index',
+                        login_required:loginPath||loginControl,
+                        search_ready:[...document.querySelectorAll(
+                            'input,textarea,[contenteditable="true"]'
+                        )].some(e=>visible(e)&&/达人昵称|抖音号|星图ID/.test(
+                            `${e.placeholder||''} ${e.getAttribute('aria-label')||''}`
+                        ))
+                    });
+                })()"""
+            )
+            if isinstance(evaluated, dict):
+                state = evaluated
+            if state.get("on_creator_index") and state.get("search_ready"):
+                break
+            if attempt < 11:
+                time.sleep(0.5)
+        if state.get("login_required"):
             raise XingtuError(
-                "auth_required: authenticated Xingtu advertiser page is unavailable"
+                "auth_required: authenticated Xingtu creator index is unavailable"
+            )
+        if not state.get("on_creator_index"):
+            raise XingtuError(
+                "page_not_ready: creator index navigation did not settle"
+            )
+        if not state.get("search_ready"):
+            raise XingtuError(
+                "page_not_ready: creator search control is not visible"
             )
         return state
 
@@ -109,6 +143,8 @@ class WebBridge:
         )
         result = self.evaluate_json(code)
         if not isinstance(result, dict) or not result.get("ok"):
+            if isinstance(result, dict) and result.get("status") in (401, 403):
+                raise XingtuError(f"auth_required: Xingtu API returned {result.get('status')}")
             raise XingtuError(f"Xingtu read failed for {path}: {result}")
         body_text = result.get("body_text")
         try:
@@ -119,9 +155,14 @@ class WebBridge:
             raise XingtuError(f"Unexpected Xingtu response for {path}")
         base = body.get("base_resp")
         if isinstance(base, dict) and base.get("status_code") not in (None, 0):
+            status_message = str(base.get("status_message", ""))
+            if re.search(r"未登录|登录失效|请登录|unauth|login", status_message, re.I):
+                raise XingtuError(
+                    f"auth_required: Xingtu API error {base.get('status_code')}"
+                )
             raise XingtuError(
                 f"Xingtu API error {base.get('status_code')}: "
-                f"{base.get('status_message', '')}"
+                f"{status_message}"
             )
         return body
 

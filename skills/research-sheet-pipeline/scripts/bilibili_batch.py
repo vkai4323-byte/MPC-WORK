@@ -37,6 +37,28 @@ def parse_identity(value: str) -> tuple[str | None, int | None]:
     return (None, int(aid.group(1))) if aid else (None, None)
 
 
+def resolve_short_video_url(value: str) -> str:
+    """Resolve a b23.tv short URL once so the existing BV/AV parser can handle it."""
+    text = str(value).strip()
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return text
+    if parsed.scheme.lower() not in {"http", "https"} or (parsed.hostname or "").lower() != "b23.tv":
+        return text
+    try:
+        import httpx
+
+        response = httpx.get(text, follow_redirects=True, timeout=10.0)
+        resolved = str(response.url)
+        if parse_identity(resolved) != (None, None):
+            return resolved
+        response.raise_for_status()
+        return resolved
+    except Exception:
+        return text
+
+
 def parse_creator_mid(value: Any, *, allow_numeric: bool) -> int | None:
     """Parse a creator MID without confusing a video AID with a creator UID."""
     if allow_numeric and isinstance(value, int) and not isinstance(value, bool):
@@ -76,8 +98,14 @@ def load_items(path: Path) -> list[dict[str, Any]]:
         else:
             raise ValueError(f"video input item {index} must be a string or object")
         source = obj.get("bvid") or obj.get("aid") or obj.get("url") or obj.get("value") or ""
-        bvid, aid = parse_identity(str(source))
-        items.append({"index": index, "key": obj.get("key", str(source)), "bvid": bvid, "aid": aid})
+        resolved_source = resolve_short_video_url(str(source))
+        bvid, aid = parse_identity(resolved_source)
+        items.append({
+            "index": index,
+            "key": obj.get("source_key", obj.get("key", str(source))),
+            "bvid": bvid,
+            "aid": aid,
+        })
     return items
 
 
@@ -238,6 +266,12 @@ async def fetch_video(
         "owner_mid": owner.get("mid"),
         "view": stat.get("view"),
         "danmaku": stat.get("danmaku"),
+        "play_count": stat.get("view"),
+        "like_count": stat.get("like"),
+        "comment_count": stat.get("reply"),
+        "share_count": stat.get("share"),
+        "favorite_count": stat.get("favorite"),
+        "coin_count": stat.get("coin"),
         "pubdate": info.get("pubdate"),
         "observed_at": observed_at(),
         "status": "ready",

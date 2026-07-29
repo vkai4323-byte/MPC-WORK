@@ -1,0 +1,29 @@
+{
+  "name": "MPC-WORK complete framework",
+  "package_date": "2026-07-29",
+  "skills": [
+    "skills/research-sheet-pipeline",
+    "skills/popo-sheet",
+    "skills/douyin-xingtu"
+  ],
+  "integrations": {
+    "feishu": [
+      "skills/research-sheet-pipeline/references/feishu-cli.md",
+      "skills/research-sheet-pipeline/references/document-providers.md",
+      "skills/research-sheet-pipeline/scripts/document_provider.py",
+      "skills/research-sheet-pipeline/scripts/feishu_doc.py"
+    ],
+    "bilibili_api": [
+      "skills/research-sheet-pipeline/scripts/bilibili_batch.py",
+      "skills/research-sheet-pipeline/requirements.txt"
+    ]
+  },
+  "excluded": [
+    "credentials",
+    "cookies and browser sessions",
+    ".deps",
+    "__pycache__",
+    "raw workbook snapshots",
+    "checkpoints and production results"
+  ]
+}

@@ -1,0 +1,11 @@
+.deps/
+__pycache__/
+*.py[cod]
+.codex-runs/
+checkpoint.json
+change-plan.json
+verification-summary.json
+webbridge-artifacts/
+*.response.json
+*.args.json
+darwin-results.tsv

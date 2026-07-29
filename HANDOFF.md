@@ -2,12 +2,20 @@
 
 ## Scope
 
-This repository contains two composable skills:
+This repository contains three composable skills:
 
 - `research-sheet-pipeline` orchestrates spreadsheet context, external research, normalization, optional document work, guarded writeback, and verification.
+- `popo-sheet` owns structured POPO workbook access, internal row/column ID mapping, preconditioned
+  JSON0 writes, and full-scope readback.
 - `douyin-xingtu` owns authenticated, read-only 巨量星图 access for Douyin creator and publication data.
 
-The pipeline decides which rows need research and whether verified records may enter a write plan. `douyin-xingtu` owns Xingtu authentication checks, endpoint schemas, identity resolution, metric provenance, retry bounds, and the mutation blacklist.
+The pipeline decides which rows and fields need research and whether verified fields may enter a
+write plan. `popo-sheet` owns POPO transport. `douyin-xingtu` owns Xingtu authentication checks,
+endpoint schemas, identity resolution, metric provenance, retry bounds, and the mutation blacklist.
+
+Feishu support is bundled inside `research-sheet-pipeline` through the official `lark-cli` routing
+guide, portable provider, and credential-free compatibility adapter. Bilibili support is bundled as
+the API-first `bilibili_batch.py`.
 
 ## Primary workflow
 
@@ -28,7 +36,8 @@ python scripts/xingtu_batch.py published-items --input published.json --output v
 5. Require item `author_id` to equal candidate `core_user_id`.
 6. Add `star_id`, evidence, observation time, source fields, and the exact match method.
 
-Only `status: ready` records may enter a sheet write plan. Stop individual records on `ambiguous`, `identity_conflict`, `metric_conflict`, `not_found`, or `auth_required`.
+Only exact `ready` fields and policy-approved `not_distributed` fields may enter a sheet write plan.
+Identity ambiguity blocks the row; a missing or unreadable metric blocks only that field.
 
 If only a publication URL or item ID is available and creator verification is not required, use `items`. If only creator identity is available, use `authors`.
 
@@ -43,6 +52,13 @@ For publication refreshes, item-detail `stats.watch_cnt` is the current-play sou
 
 Use `--strict-conflicts` when every cross-surface difference must block the record as `metric_conflict`.
 
+For multi-platform distribution refreshes:
+
+- `ready`: write the verified field;
+- `not_distributed`: write `0` only when absence is proven and the policy says to do so;
+- `blocked`: preserve an unreadable linked distribution;
+- never suppress ready sibling fields because another platform is blocked.
+
 ## Safety and credentials
 
 - The Xingtu skill is read-only.
@@ -56,9 +72,12 @@ Use `--strict-conflicts` when every cross-surface difference must block the reco
 Run the deterministic checks from the repository root:
 
 ```powershell
+python -B -m py_compile skills/popo-sheet/scripts/name_match_tsv.py
 python -B -m py_compile skills/douyin-xingtu/scripts/xingtu_batch.py skills/douyin-xingtu/scripts/test_xingtu_batch.py
 python -B skills/douyin-xingtu/scripts/test_xingtu_batch.py
 python -B skills/douyin-xingtu/scripts/xingtu_batch.py --help
+python -B skills/research-sheet-pipeline/scripts/bilibili_batch.py --self-test
+python -B skills/research-sheet-pipeline/scripts/compose_chain.py --self-test
 ```
 
 The test suite covers:
@@ -69,7 +88,8 @@ The test suite covers:
 - current item-detail playback winning over cached summaries by default;
 - strict conflict mode blocking cross-surface playback differences.
 
-Run the Skill folder validator against both skill directories in an UTF-8 Python environment with `PyYAML` available.
+Run the Skill folder validator against all three skill directories in an UTF-8 Python environment
+with `PyYAML` available.
 
 ## Operational limitations
 
@@ -89,4 +109,5 @@ When Xingtu changes:
 4. Add or update a deterministic regression test.
 5. Run the unit suite, Skill validation, and one bounded authenticated smoke test.
 
-Keep the two skills separate. Add new Xingtu capabilities to `douyin-xingtu`, then update only the routing contract in `research-sheet-pipeline`.
+Keep the three skills separate. Add new Xingtu capabilities to `douyin-xingtu`, POPO transport
+changes to `popo-sheet`, and update only the routing contract in `research-sheet-pipeline`.
