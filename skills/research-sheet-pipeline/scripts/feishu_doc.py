@@ -16,13 +16,16 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 
-VERSION = "2.1.0"
+VERSION = "2.3.0"
 CAPABILITIES = [
     "document.read",
     "document.copy",
     "document.update",
     "document.readback",
     "document.structure.read",
+    "spreadsheet.read",
+    "spreadsheet.structure.read",
+    "spreadsheet.write",
     "permission.public.read",
     "permission.public.anyone_editable",
 ]
@@ -261,6 +264,630 @@ def resolve_wiki(value: str, token: str) -> dict:
         "space_id": node.get("space_id"),
         "obj_type": node.get("obj_type"),
         "obj_token": node.get("obj_token"),
+    }
+
+
+def extract_spreadsheet_token(value: str, token: str) -> tuple[str, Optional[dict]]:
+    parsed = urlparse(value)
+    if parsed.scheme and parsed.netloc:
+        host = (parsed.hostname or "").lower()
+        if not (
+            host == "feishu.cn"
+            or host.endswith(".feishu.cn")
+            or host == "larksuite.com"
+            or host.endswith(".larksuite.com")
+        ):
+            raise FeishuError("Spreadsheet URL host must be Feishu or Lark")
+        match = re.search(r"/sheets/([^/?#]+)", parsed.path)
+        if match:
+            return match.group(1), None
+        if re.search(r"/wiki/[^/?#]+", parsed.path):
+            resolved = resolve_wiki(value, token)
+            if resolved.get("obj_type") != "sheet":
+                raise FeishuError(
+                    f"Wiki node is {resolved.get('obj_type')!r}, not a spreadsheet"
+                )
+            spreadsheet_token = resolved.get("obj_token")
+            if not spreadsheet_token:
+                raise FeishuError("Wiki node did not return a spreadsheet token")
+            return str(spreadsheet_token), resolved
+        raise FeishuError("Could not find /wiki/{token} or /sheets/{token} in URL")
+
+    spreadsheet_token = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{2,128}", spreadsheet_token):
+        raise FeishuError("Invalid spreadsheet token")
+    return spreadsheet_token, None
+
+
+def list_sheets(spreadsheet: str, token: str) -> dict:
+    spreadsheet_token, resolved = extract_spreadsheet_token(spreadsheet, token)
+    result = request_json(
+        "GET",
+        f"/sheets/v3/spreadsheets/{encoded_token(spreadsheet_token, 'spreadsheet token')}/sheets/query",
+        token=token,
+    )
+    sheets = result.get("data", {}).get("sheets", [])
+    if not isinstance(sheets, list):
+        raise FeishuError("Feishu returned an invalid sheet list")
+    sheets = sorted(
+        sheets,
+        key=lambda item: item.get("index", 0) if isinstance(item, dict) else 0,
+    )
+    return {
+        "spreadsheet_token": spreadsheet_token,
+        "wiki": resolved,
+        "sheet_count": len(sheets),
+        "sheets": sheets,
+    }
+
+
+def select_sheet(sheets: list[dict], selector: Optional[str]) -> dict:
+    if not sheets:
+        raise FeishuError("Spreadsheet has no worksheets")
+    if selector is None:
+        if len(sheets) != 1:
+            choices = [
+                {
+                    "sheet_id": item.get("sheet_id"),
+                    "title": item.get("title"),
+                    "index": item.get("index"),
+                }
+                for item in sheets
+            ]
+            raise FeishuError(
+                "Spreadsheet contains multiple worksheets; pass --sheet with an exact "
+                f"sheet ID or title. Available sheets: {json.dumps(choices, ensure_ascii=False)}"
+            )
+        return sheets[0]
+
+    exact = [
+        item
+        for item in sheets
+        if item.get("sheet_id") == selector or item.get("title") == selector
+    ]
+    if len(exact) != 1:
+        raise FeishuError(
+            f"Expected exactly one worksheet matching {selector!r}, found {len(exact)}"
+        )
+    return exact[0]
+
+
+def read_sheet(
+    spreadsheet: str,
+    token: str,
+    sheet_selector: Optional[str] = None,
+    cell_range: Optional[str] = None,
+    value_render_option: Optional[str] = "ToString",
+) -> dict:
+    listed = list_sheets(spreadsheet, token)
+    sheet = select_sheet(listed["sheets"], sheet_selector)
+    sheet_id = sheet.get("sheet_id")
+    if not sheet_id:
+        raise FeishuError("Worksheet did not return a sheet_id")
+
+    range_ref = str(sheet_id)
+    if cell_range:
+        cleaned_range = cell_range.strip()
+        if not re.fullmatch(
+            r"[A-Za-z]+[1-9][0-9]*(?::[A-Za-z]+[1-9][0-9]*)?",
+            cleaned_range,
+        ):
+            raise FeishuError("Range must use A1 notation such as A1:C20")
+        if ":" not in cleaned_range:
+            cleaned_range = f"{cleaned_range}:{cleaned_range}"
+        range_ref = f"{sheet_id}!{cleaned_range}"
+
+    path = (
+        f"/sheets/v2/spreadsheets/{encoded_token(listed['spreadsheet_token'], 'spreadsheet token')}"
+        f"/values/{quote(range_ref, safe='!:')}"
+    )
+    if value_render_option:
+        allowed = {"ToString", "Formula", "FormattedValue", "UnformattedValue"}
+        if value_render_option not in allowed:
+            raise FeishuError(
+                "value-render-option must be one of: " + ", ".join(sorted(allowed))
+            )
+        path += f"?valueRenderOption={quote(value_render_option)}"
+
+    result = request_json("GET", path, token=token)
+    data = result.get("data", {})
+    value_range = data.get("valueRange", {})
+    values = value_range.get("values", [])
+    if not isinstance(values, list):
+        raise FeishuError("Feishu returned invalid worksheet values")
+
+    nonempty_rows = sum(
+        1
+        for row in values
+        if isinstance(row, list) and any(cell not in (None, "") for cell in row)
+    )
+    max_columns = max(
+        (len(row) for row in values if isinstance(row, list)),
+        default=0,
+    )
+    grid = sheet.get("grid_properties") or sheet.get("gridProperties") or {}
+    return {
+        "spreadsheet_token": listed["spreadsheet_token"],
+        "wiki": listed["wiki"],
+        "sheet": {
+            "sheet_id": sheet_id,
+            "title": sheet.get("title"),
+            "index": sheet.get("index"),
+            "hidden": sheet.get("hidden"),
+            "grid_properties": grid,
+        },
+        "range": value_range.get("range") or range_ref,
+        "revision": value_range.get("revision", data.get("revision")),
+        "value_render_option": value_render_option,
+        "total_rows_returned": len(values),
+        "nonempty_rows": nonempty_rows,
+        "max_columns_returned": max_columns,
+        "values": values,
+    }
+
+
+def column_number(label: str) -> int:
+    value = 0
+    for char in label.upper():
+        value = value * 26 + ord(char) - ord("A") + 1
+    return value
+
+
+def parse_bounded_a1(cell_range: str) -> dict:
+    cleaned = cell_range.strip().upper()
+    match = re.fullmatch(
+        r"([A-Z]+)([1-9][0-9]*)(?::([A-Z]+)([1-9][0-9]*))?",
+        cleaned,
+    )
+    if not match:
+        raise FeishuError("Write range must be a bounded A1 range such as J65 or A1:C20")
+    start_col, start_row, end_col, end_row = match.groups()
+    end_col = end_col or start_col
+    end_row = end_row or start_row
+    start_col_number = column_number(start_col)
+    end_col_number = column_number(end_col)
+    start_row_number = int(start_row)
+    end_row_number = int(end_row)
+    if end_col_number < start_col_number or end_row_number < start_row_number:
+        raise FeishuError("Write range end must not precede its start")
+    rows = end_row_number - start_row_number + 1
+    columns = end_col_number - start_col_number + 1
+    if rows > 5000 or columns > 100:
+        raise FeishuError("One write range may not exceed 5000 rows or 100 columns")
+    normalized_range = cleaned if ":" in cleaned else f"{cleaned}:{cleaned}"
+    return {
+        "range": normalized_range,
+        "start_row": start_row_number,
+        "end_row": end_row_number,
+        "start_col": start_col_number,
+        "end_col": end_col_number,
+        "rows": rows,
+        "columns": columns,
+    }
+
+
+def load_values_file(path: Path, label: str = "values") -> list[list]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FeishuError(f"Could not read {label} JSON file: {exc}") from exc
+    if isinstance(payload, dict):
+        payload = payload.get("values")
+    if not isinstance(payload, list):
+        raise FeishuError(f"{label} JSON must be a matrix or an object with a values matrix")
+    return payload
+
+
+def validate_values(
+    values: list[list],
+    dimensions: dict,
+    *,
+    label: str = "values",
+    allow_formulas: bool = False,
+) -> list[list]:
+    if len(values) != dimensions["rows"]:
+        raise FeishuError(
+            f"{label} row count {len(values)} does not match range row count {dimensions['rows']}"
+        )
+    normalized: list[list] = []
+    for row_index, row in enumerate(values, start=1):
+        if not isinstance(row, list) or len(row) != dimensions["columns"]:
+            raise FeishuError(
+                f"{label} row {row_index} must contain exactly {dimensions['columns']} cells"
+            )
+        checked_row = []
+        for column_index, cell in enumerate(row, start=1):
+            if not isinstance(cell, (str, int, float, bool)) and cell is not None:
+                raise FeishuError(
+                    f"{label} cell {row_index},{column_index} must be a JSON scalar or null"
+                )
+            if isinstance(cell, str):
+                if len(cell) > 40000:
+                    raise FeishuError(
+                        f"{label} cell {row_index},{column_index} exceeds the 40000 character safety limit"
+                    )
+                if cell.startswith("=") and not allow_formulas:
+                    raise FeishuError(
+                        f"{label} cell {row_index},{column_index} looks like a formula; pass --allow-formulas explicitly"
+                    )
+            checked_row.append(cell)
+        normalized.append(checked_row)
+    return normalized
+
+
+def normalize_grid(values: list, rows: int, columns: int) -> list[list]:
+    grid: list[list] = []
+    for row_index in range(rows):
+        source = values[row_index] if row_index < len(values) and isinstance(values[row_index], list) else []
+        grid.append([source[column_index] if column_index < len(source) else None for column_index in range(columns)])
+    return grid
+
+
+def stable_hash(value) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def idempotency_store_path() -> Path:
+    root = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+    return root / "Codex" / "FeishuSheetWrites" / "receipts.json"
+
+
+def load_idempotency_receipts() -> dict:
+    path = idempotency_store_path()
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_idempotency_receipt(key: str, fingerprint: str, result_hash: str) -> None:
+    path = idempotency_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    receipts = load_idempotency_receipts()
+    receipts[key] = {
+        "fingerprint": fingerprint,
+        "result_hash": result_hash,
+        "recorded_at_unix": int(time.time()),
+    }
+    temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(receipts, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def validate_idempotency_key(key: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", key):
+        raise FeishuError(
+            "Idempotency key must be 8-128 characters using letters, digits, dot, underscore, colon, or hyphen"
+        )
+
+
+def changed_cell_count(before: list[list], after: list[list]) -> int:
+    return sum(
+        1
+        for row_index, row in enumerate(after)
+        for column_index, cell in enumerate(row)
+        if before[row_index][column_index] != cell
+    )
+
+
+def read_write_target(
+    spreadsheet: str,
+    token: str,
+    sheet_selector: str,
+    cell_range: str,
+) -> tuple[dict, dict, dict, list[list]]:
+    dimensions = parse_bounded_a1(cell_range)
+    current = read_sheet(
+        spreadsheet,
+        token,
+        sheet_selector=sheet_selector,
+        cell_range=dimensions["range"],
+        value_render_option="ToString",
+    )
+    normalized = normalize_grid(
+        current["values"],
+        dimensions["rows"],
+        dimensions["columns"],
+    )
+    return current, current["sheet"], dimensions, normalized
+
+
+def verify_expected_revision(actual, expected: Optional[int]) -> None:
+    if expected is not None and actual != expected:
+        raise FeishuError(
+            f"Revision precondition failed: expected {expected!r}, found {actual!r}"
+        )
+
+
+def write_sheet(
+    spreadsheet: str,
+    token: str,
+    *,
+    sheet_selector: str,
+    cell_range: str,
+    values_file: Path,
+    expected_values_file: Optional[Path],
+    expected_revision: Optional[int],
+    idempotency_key: str,
+    dry_run: bool,
+    allow_formulas: bool,
+    write_unchanged: bool,
+) -> dict:
+    validate_idempotency_key(idempotency_key)
+    current, sheet, dimensions, before = read_write_target(
+        spreadsheet, token, sheet_selector, cell_range
+    )
+    desired = validate_values(
+        load_values_file(values_file),
+        dimensions,
+        allow_formulas=allow_formulas,
+    )
+    if expected_values_file:
+        expected_values = validate_values(
+            load_values_file(expected_values_file, "expected values"),
+            dimensions,
+            label="expected values",
+            allow_formulas=True,
+        )
+        if before != expected_values:
+            raise FeishuError("Expected-values precondition failed; target cells changed")
+    spreadsheet_token = current["spreadsheet_token"]
+    range_ref = f"{sheet['sheet_id']}!{dimensions['range']}"
+    fingerprint = stable_hash(
+        {
+            "spreadsheet": spreadsheet_token,
+            "range": range_ref,
+            "values": desired,
+        }
+    )
+    receipts = load_idempotency_receipts()
+    prior = receipts.get(idempotency_key)
+    if prior and prior.get("fingerprint") != fingerprint:
+        raise FeishuError("Idempotency key was already used for a different write payload")
+
+    changed_cells = changed_cell_count(before, desired)
+    base_report = {
+        "sheet": sheet,
+        "range": range_ref,
+        "dry_run": dry_run,
+        "precondition": {
+            "expected_revision": expected_revision,
+            "actual_revision": current.get("revision"),
+            "expected_values_checked": expected_values_file is not None,
+            "atomic_server_compare_and_swap": False,
+        },
+        "rows": dimensions["rows"],
+        "columns": dimensions["columns"],
+        "cells": dimensions["rows"] * dimensions["columns"],
+        "changed_cells": changed_cells,
+        "payload_sha256": fingerprint,
+    }
+    if prior and not dry_run:
+        if before != desired:
+            raise FeishuError(
+                "Idempotent replay refused: receipt exists but current cells no longer match the recorded result"
+            )
+        return {
+            **base_report,
+            "apply_status": "idempotent_replay",
+            "verification_status": "verified",
+        }
+    verify_expected_revision(current.get("revision"), expected_revision)
+    if dry_run:
+        return {
+            **base_report,
+            "apply_status": "dry_run",
+            "verification_status": "not_run",
+        }
+    if changed_cells == 0 and not write_unchanged:
+        save_idempotency_receipt(idempotency_key, fingerprint, stable_hash(before))
+        return {
+            **base_report,
+            "apply_status": "unchanged",
+            "verification_status": "verified",
+        }
+
+    result = request_json(
+        "PUT",
+        f"/sheets/v2/spreadsheets/{encoded_token(spreadsheet_token, 'spreadsheet token')}/values",
+        token=token,
+        body={"valueRange": {"range": range_ref, "values": desired}},
+        retryable=False,
+    )
+    readback, _, _, after = read_write_target(
+        spreadsheet, token, str(sheet["sheet_id"]), dimensions["range"]
+    )
+    if after != desired:
+        raise FeishuError(
+            "Write completed but exact readback verification failed; inspect the target range before retrying"
+        )
+    save_idempotency_receipt(idempotency_key, fingerprint, stable_hash(after))
+    write_data = result.get("data", {})
+    return {
+        **base_report,
+        "apply_status": "applied",
+        "verification_status": "verified",
+        "revision_before": current.get("revision"),
+        "revision_after": readback.get("revision"),
+        "updated_range": write_data.get("updatedRange"),
+        "updated_cells": write_data.get("updatedCells"),
+    }
+
+
+def load_batch_plan(path: Path) -> list[dict]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FeishuError(f"Could not read batch plan JSON file: {exc}") from exc
+    writes = payload.get("writes") if isinstance(payload, dict) else payload
+    if not isinstance(writes, list) or not writes:
+        raise FeishuError("Batch plan must contain a non-empty writes list")
+    if len(writes) > 100:
+        raise FeishuError("Batch plan may contain at most 100 ranges")
+    if not all(isinstance(item, dict) for item in writes):
+        raise FeishuError("Each batch write entry must be an object")
+    return writes
+
+
+def write_sheet_batch(
+    spreadsheet: str,
+    token: str,
+    *,
+    plan_file: Path,
+    expected_revision: Optional[int],
+    idempotency_key: str,
+    dry_run: bool,
+    allow_formulas: bool,
+    write_unchanged: bool,
+) -> dict:
+    validate_idempotency_key(idempotency_key)
+    entries = load_batch_plan(plan_file)
+    prepared = []
+    spreadsheet_token = None
+    actual_revision = None
+    occupied: set[tuple[str, int, int]] = set()
+    for entry in entries:
+        selector = entry.get("sheet")
+        cell_range = entry.get("range")
+        if not isinstance(selector, str) or not isinstance(cell_range, str):
+            raise FeishuError("Every batch entry requires string sheet and range fields")
+        current, sheet, dimensions, before = read_write_target(
+            spreadsheet, token, selector, cell_range
+        )
+        spreadsheet_token = spreadsheet_token or current["spreadsheet_token"]
+        if actual_revision is None:
+            actual_revision = current.get("revision")
+        values = entry.get("values")
+        if not isinstance(values, list):
+            raise FeishuError("Every batch entry requires a values matrix")
+        desired = validate_values(
+            values,
+            dimensions,
+            allow_formulas=allow_formulas,
+        )
+        expected_values = entry.get("expected_values")
+        if expected_values is not None:
+            expected_values = validate_values(
+                expected_values,
+                dimensions,
+                label="expected values",
+                allow_formulas=True,
+            )
+            if before != expected_values:
+                raise FeishuError(
+                    f"Expected-values precondition failed for {sheet['title']}!{dimensions['range']}"
+                )
+        for row in range(dimensions["start_row"], dimensions["end_row"] + 1):
+            for column in range(dimensions["start_col"], dimensions["end_col"] + 1):
+                coordinate = (str(sheet["sheet_id"]), row, column)
+                if coordinate in occupied:
+                    raise FeishuError("Batch plan contains overlapping target ranges")
+                occupied.add(coordinate)
+        prepared.append(
+            {
+                "sheet": sheet,
+                "dimensions": dimensions,
+                "before": before,
+                "desired": desired,
+                "range_ref": f"{sheet['sheet_id']}!{dimensions['range']}",
+            }
+        )
+    payload_ranges = [
+        {"range": item["range_ref"], "values": item["desired"]}
+        for item in prepared
+    ]
+    fingerprint = stable_hash(
+        {"spreadsheet": spreadsheet_token, "valueRanges": payload_ranges}
+    )
+    receipts = load_idempotency_receipts()
+    prior = receipts.get(idempotency_key)
+    if prior and prior.get("fingerprint") != fingerprint:
+        raise FeishuError("Idempotency key was already used for a different write payload")
+    changed_cells = sum(
+        changed_cell_count(item["before"], item["desired"]) for item in prepared
+    )
+    base_report = {
+        "range_count": len(prepared),
+        "ranges": [item["range_ref"] for item in prepared],
+        "dry_run": dry_run,
+        "precondition": {
+            "expected_revision": expected_revision,
+            "actual_revision": actual_revision,
+            "atomic_server_compare_and_swap": False,
+        },
+        "changed_cells": changed_cells,
+        "payload_sha256": fingerprint,
+    }
+    all_match = all(item["before"] == item["desired"] for item in prepared)
+    if prior and not dry_run:
+        if not all_match:
+            raise FeishuError(
+                "Idempotent replay refused: receipt exists but current cells no longer match the recorded result"
+            )
+        return {
+            **base_report,
+            "apply_status": "idempotent_replay",
+            "verification_status": "verified",
+        }
+    verify_expected_revision(actual_revision, expected_revision)
+    if dry_run:
+        return {
+            **base_report,
+            "apply_status": "dry_run",
+            "verification_status": "not_run",
+        }
+    if all_match and not write_unchanged:
+        save_idempotency_receipt(idempotency_key, fingerprint, stable_hash(payload_ranges))
+        return {
+            **base_report,
+            "apply_status": "unchanged",
+            "verification_status": "verified",
+        }
+
+    result = request_json(
+        "POST",
+        f"/sheets/v2/spreadsheets/{encoded_token(str(spreadsheet_token), 'spreadsheet token')}/values_batch_update",
+        token=token,
+        body={"valueRanges": payload_ranges},
+        retryable=False,
+    )
+    readback_hashes = []
+    revisions_after = []
+    for item in prepared:
+        readback, _, _, after = read_write_target(
+            spreadsheet,
+            token,
+            str(item["sheet"]["sheet_id"]),
+            item["dimensions"]["range"],
+        )
+        if after != item["desired"]:
+            raise FeishuError(
+                f"Batch write completed but exact readback failed for {item['range_ref']}; inspect before retrying"
+            )
+        readback_hashes.append(stable_hash(after))
+        revisions_after.append(readback.get("revision"))
+    save_idempotency_receipt(
+        idempotency_key,
+        fingerprint,
+        stable_hash(readback_hashes),
+    )
+    data = result.get("data", {})
+    return {
+        **base_report,
+        "apply_status": "applied",
+        "verification_status": "verified",
+        "revision_before": actual_revision,
+        "revision_after": max(
+            (item for item in revisions_after if isinstance(item, int)),
+            default=data.get("revision"),
+        ),
     }
 
 
@@ -637,6 +1264,34 @@ def replacement_failed(report: dict, dry_run: bool) -> bool:
 
 def self_test() -> None:
     assert parse_env_text("A=1\nFEISHU_APP_ID='x'") == {"A": "1", "FEISHU_APP_ID": "x"}
+    sheet_token, resolved = extract_spreadsheet_token(
+        "https://sample.feishu.cn/sheets/shtcnExampleToken?sheet=main",
+        "unused",
+    )
+    assert sheet_token == "shtcnExampleToken" and resolved is None
+    sample_sheets = [
+        {"sheet_id": "main", "title": "Main", "index": 0},
+        {"sheet_id": "archive", "title": "Archive", "index": 1},
+    ]
+    assert select_sheet(sample_sheets, "Main")["sheet_id"] == "main"
+    assert select_sheet(sample_sheets, "archive")["title"] == "Archive"
+    assert parse_bounded_a1("j65")["range"] == "J65:J65"
+    assert parse_bounded_a1("A1:C2")["columns"] == 3
+    assert parse_bounded_a1("A1:C2")["rows"] == 2
+    assert normalize_grid([[1]], 2, 2) == [[1, None], [None, None]]
+    assert validate_values([[1, "x"]], parse_bounded_a1("A1:B1")) == [[1, "x"]]
+    try:
+        validate_values([["=1+1"]], parse_bounded_a1("A1"))
+    except FeishuError:
+        pass
+    else:
+        raise AssertionError("formula payload was accepted without --allow-formulas")
+    try:
+        select_sheet(sample_sheets, None)
+    except FeishuError:
+        pass
+    else:
+        raise AssertionError("multi-sheet selection without --sheet was accepted")
     assert normalize_replacements({"old": "new"})[0]["mode"] == "contains"
     for payload in (
         [],
@@ -699,6 +1354,56 @@ def build_parser() -> argparse.ArgumentParser:
     resolve.add_argument("wiki")
     raw = sub.add_parser("raw", help="Print raw text from a docx document.")
     raw.add_argument("document_id")
+    sheet_list = sub.add_parser(
+        "sheet-list",
+        help="Resolve a spreadsheet or wiki URL and list its worksheets.",
+    )
+    sheet_list.add_argument("spreadsheet")
+    sheet_read = sub.add_parser(
+        "sheet-read",
+        help="Read one worksheet as structured JSON using the Feishu Sheets API.",
+    )
+    sheet_read.add_argument("spreadsheet")
+    sheet_read.add_argument(
+        "--sheet",
+        dest="sheet_selector",
+        help="Exact sheet ID or title. Required when the spreadsheet has multiple worksheets.",
+    )
+    sheet_read.add_argument(
+        "--range",
+        dest="cell_range",
+        help="Optional A1 range without the sheet prefix, for example A1:Z200.",
+    )
+    sheet_read.add_argument(
+        "--value-render-option",
+        default="ToString",
+        choices=("ToString", "Formula", "FormattedValue", "UnformattedValue"),
+    )
+    sheet_write = sub.add_parser(
+        "sheet-write",
+        help="Safely write one exact worksheet range and verify it by readback.",
+    )
+    sheet_write.add_argument("spreadsheet")
+    sheet_write.add_argument("--sheet", dest="sheet_selector", required=True)
+    sheet_write.add_argument("--range", dest="cell_range", required=True)
+    sheet_write.add_argument("--values-file", type=Path, required=True)
+    sheet_write.add_argument("--expected-values-file", type=Path)
+    sheet_write.add_argument("--expected-revision", type=int)
+    sheet_write.add_argument("--idempotency-key", required=True)
+    sheet_write.add_argument("--dry-run", action="store_true")
+    sheet_write.add_argument("--allow-formulas", action="store_true")
+    sheet_write.add_argument("--write-unchanged", action="store_true", help=argparse.SUPPRESS)
+    sheet_batch_write = sub.add_parser(
+        "sheet-batch-write",
+        help="Safely write multiple exact ranges from a JSON plan and verify each range.",
+    )
+    sheet_batch_write.add_argument("spreadsheet")
+    sheet_batch_write.add_argument("plan_file", type=Path)
+    sheet_batch_write.add_argument("--expected-revision", type=int)
+    sheet_batch_write.add_argument("--idempotency-key", required=True)
+    sheet_batch_write.add_argument("--dry-run", action="store_true")
+    sheet_batch_write.add_argument("--allow-formulas", action="store_true")
+    sheet_batch_write.add_argument("--write-unchanged", action="store_true", help=argparse.SUPPRESS)
     copy = sub.add_parser("wiki-copy", help="Copy a wiki node in its current knowledge space.")
     copy.add_argument("wiki")
     copy.add_argument("title")
@@ -747,6 +1452,41 @@ def main() -> int:
     elif args.command == "raw":
         print(raw_content(args.document_id, token))
         return 0
+    elif args.command == "sheet-list":
+        output = list_sheets(args.spreadsheet, token)
+    elif args.command == "sheet-read":
+        output = read_sheet(
+            args.spreadsheet,
+            token,
+            sheet_selector=args.sheet_selector,
+            cell_range=args.cell_range,
+            value_render_option=args.value_render_option,
+        )
+    elif args.command == "sheet-write":
+        output = write_sheet(
+            args.spreadsheet,
+            token,
+            sheet_selector=args.sheet_selector,
+            cell_range=args.cell_range,
+            values_file=args.values_file,
+            expected_values_file=args.expected_values_file,
+            expected_revision=args.expected_revision,
+            idempotency_key=args.idempotency_key,
+            dry_run=args.dry_run,
+            allow_formulas=args.allow_formulas,
+            write_unchanged=args.write_unchanged,
+        )
+    elif args.command == "sheet-batch-write":
+        output = write_sheet_batch(
+            args.spreadsheet,
+            token,
+            plan_file=args.plan_file,
+            expected_revision=args.expected_revision,
+            idempotency_key=args.idempotency_key,
+            dry_run=args.dry_run,
+            allow_formulas=args.allow_formulas,
+            write_unchanged=args.write_unchanged,
+        )
     elif args.command == "wiki-copy":
         output = copy_wiki(
             args.wiki,

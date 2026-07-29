@@ -12,9 +12,15 @@ Default to the fixed fast path. Adapter count does not make a job complex.
 | Data/action | Owner |
 |---|---|
 | POPO read/write | `$popo-sheet` in one `$kimi-webbridge` task session |
+| Any Feishu online document work | official `lark-cli` via `scripts/document_provider.py` |
 | Bilibili video/creator data | bundled `scripts/bilibili_batch.py` |
 | Douyin/Xingtu data | `$douyin-xingtu` |
 | Documents or unknown providers | complex path |
+
+Any `feishu.cn`, `larksuite.com`, or compatible `/wiki/`, `/docx/`, `/sheets/`,
+`/base/`, `/bitable/`, `/slides/`, `/drive/` resource must first read
+`references/feishu-cli.md`. Do not use a browser bridge to read or mutate Feishu
+online documents.
 
 Load selected companion skills. Do not load pipeline references for the fixed path.
 
