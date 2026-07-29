@@ -5,7 +5,8 @@
 - Site Structure
 - ShareDB Snapshot Read Path
 - ShareDB Simple Write Path
-- Addressing Internals
+- Workbook Addressing Internals
+- UI Addressing Internals
 - WebBridge Request Files On Windows
 - Screenshot And Diagnostic Artifacts
 - Keyboard And Clipboard Fallback
@@ -51,16 +52,21 @@ Verified facts:
 - `/api/app/cowork/doc?identity=<identity>` returns document metadata.
 - The ShareDB WebSocket URL is:
   `wss://office.netease.com/node/?identity=<identity>&serverType=GEZHI&source=POPO_DOC&wantCompress=false&lang=zh-CN`.
-- The first WebSocket message is `begin` and includes `collectionID` and `docID`.
-- Sending `{"a":"f","c":collectionID,"d":docID}` returns a full workbook snapshot.
-- In the returned workbook JSON, sheet cells are under `sheets[sheetId].cells`. Cell keys look like
-  `row,col`; text/value is usually in property `"0"`, hyperlink URL/display often uses `"0"` and
-  `"1"`, and style/format ids use keys such as `"100"`/`"101"`.
+- POPO sends `begin` with `collectionID`/`docID`, then ShareDB sends `init`. Record both and send
+  fetch/op only after `init`; requests sent between `begin` and `init` can be silently dropped.
+- Sending `{"a":"f","c":collectionID,"d":docID}` after `init` returns a full workbook snapshot.
+- A 1.5 MB workbook has taken about 24 seconds to fetch. Use a configurable timeout with a
+  45,000 ms default and record protocol stages for diagnosis.
+- `workbook.tabs` is an array of sheet ID strings in visual tab order.
+- In the returned workbook JSON, sheet cells are under `sheets[sheetId].cells`. Cell keys are
+  `<internalRowId>,<internalColId>`, not visual indexes; either ID may be a large integer.
+  Text/value is usually in property `"0"`, hyperlink URL/display often uses `"0"` and `"1"`, and
+  style/format ids use keys such as `"100"`/`"101"`.
 
 Minimal browser-side probe:
 
 ```javascript
-async function fetchPopoWorkbookSnapshot() {
+async function fetchPopoWorkbookSnapshot(timeoutMs = 45000) {
   const iframe = document.querySelector("iframe");
   const iframeUrl = new URL(iframe.src);
   const identity = iframeUrl.searchParams.get("identity");
@@ -77,31 +83,72 @@ async function fetchPopoWorkbookSnapshot() {
 
   return await new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => reject(new Error("snapshot timeout")), 10000);
+    const stages = [];
+    let begin = null;
+    let initSeen = false;
+    let fetchSent = false;
+
+    const finishError = (message) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(new Error(message + " at stages=" + stages.join(",")));
+    };
+    const maybeFetch = () => {
+      if (!begin || !initSeen || fetchSent) return;
+      fetchSent = true;
+      stages.push("fetch-sent");
+      ws.send(JSON.stringify({
+        a: "f",
+        c: begin.collectionID,
+        d: begin.docID,
+      }));
+    };
+    const timer = setTimeout(
+      () => finishError("snapshot timeout"),
+      timeoutMs
+    );
+    ws.onopen = () => stages.push("open");
     ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
+      let msg;
+      try { msg = JSON.parse(event.data); } catch { return; }
       if (msg.begin) {
-        ws.send(JSON.stringify({ a: "f", c: msg.collectionID, d: msg.docID }));
+        begin = msg;
+        stages.push("begin");
+        maybeFetch();
+      } else if (msg.a === "init") {
+        initSeen = true;
+        stages.push("init");
+        maybeFetch();
       } else if (msg.a === "f") {
+        stages.push("fetch-recv");
         clearTimeout(timer);
         ws.close();
-        resolve(msg.data.data);
+        resolve({
+          workbook: msg.data.data,
+          version: msg.data.v,
+          begin,
+          stages,
+        });
       }
     };
-    ws.onerror = () => reject(new Error("snapshot websocket error"));
+    ws.onerror = () => finishError("snapshot websocket error");
   });
 }
 ```
 
 Extraction rule:
 
-1. Read `data.tabs` and `data.sheets`.
-2. Select the active/requested sheet by tab id or title.
-3. Enumerate the complete live data-row ID set from the sheet row vector. Require the scanned ID set
+1. Read `workbook.tabs` and `workbook.sheets`. Treat `tabs` as sheet IDs in visual order.
+2. Select the active/requested sheet by exact sheet ID/title; a URL `tab=N` points to
+   `workbook.tabs[N]`.
+3. Map visual row/column positions through `sheet.rows[]` and `sheet.cols[]`. For visual row `r` and
+   column `c`, address ``sheet.cells[`${sheet.rows[r]},${sheet.cols[c]}`]``.
+4. Enumerate the complete live data-row ID set from the sheet row vector. Require the scanned ID set
    to equal it before applying any date/status/platform/name/blank filter.
-4. Build a sparse table from `sheet.cells`: split each key at `,`, use `cell["0"]` as the visible
-   value, and use `cell["1"]` as link/formula metadata when present.
-5. Infer header columns from row 0 or the local section header, then match rows by the in-sheet name
+5. Build a sparse table from `sheet.cells`: split each key at `,` into internal IDs, map them through
+   `rows[]`/`cols[]`, use `cell["0"]` as the visible value, and use `cell["1"]` as link/formula
+   metadata when present.
+6. Infer header columns from row 0 or the local section header, then match rows by the in-sheet name
    column.
 
 Rows matching one predicate may be non-contiguous. Never use a fixed upper bound, viewport sample,
@@ -112,7 +159,34 @@ Fallbacks:
 - If the WebSocket returns `MISS_DOC_INFO`, rebuild the URL with `identity`, `serverType=GEZHI`,
   `source=POPO_DOC`, `wantCompress=false`, and `lang`.
 - If `export-file` returns `没有导出权限`, do not use export as the primary path.
-- If ShareDB snapshot fails, then use grid actions or clipboard TSV fallback.
+- On timeout, inspect the recorded stages before changing tools. `open,begin,init,fetch-sent` without
+  `fetch-recv` usually calls for the one allowed same-adapter retry at the configured timeout, not
+  protocol guessing or immediate UI fallback.
+- If ShareDB snapshot still fails within the bounded retry budget, then use grid actions or clipboard
+  TSV fallback.
+
+## Workbook Addressing Internals
+
+Never compose a cell key from visual row/column numbers. Resolve both internal IDs from the selected
+sheet snapshot:
+
+```javascript
+const sheetId = workbook.tabs[visualTabIndex];
+const sheet = workbook.sheets[sheetId];
+const rowId = sheet.rows[visualRowIndex];
+const colId = sheet.cols[visualColIndex];
+const key = `${rowId},${colId}`;
+
+const rowIdToVisualIndex = Object.fromEntries(
+  sheet.rows.map((id, index) => [String(id), index])
+);
+const colIdToVisualIndex = Object.fromEntries(
+  sheet.cols.map((id, index) => [String(id), index])
+);
+```
+
+Use the reverse maps when interpreting sparse `sheet.cells`. Keep row/column IDs only for the exact
+snapshot version that produced them; rebuild after transport failure or a fresh snapshot.
 
 ## ShareDB Simple Write Path
 
@@ -136,7 +210,7 @@ Validated live behavior:
 Minimal write pattern:
 
 ```javascript
-async function writePopoSimpleCells(edits) {
+async function writePopoSimpleCells(edits, timeoutMs = 45000) {
   const iframe = document.querySelector("iframe");
   const iframeUrl = new URL(iframe.src);
   const identity = iframeUrl.searchParams.get("identity");
@@ -151,24 +225,66 @@ async function writePopoSimpleCells(edits) {
       lang,
     });
 
-  async function fetchSnapshot() {
+  async function requestAfterInit(label, buildMessage, accept) {
     return await new Promise((resolve, reject) => {
       const ws = new WebSocket(wsUrl);
-      const timer = setTimeout(() => reject(new Error("snapshot timeout")), 15000);
+      const stages = [];
       let begin = null;
+      let initSeen = false;
+      let sent = false;
+      const finishError = (message) => {
+        clearTimeout(timer);
+        ws.close();
+        reject(new Error(message + " at stages=" + stages.join(",")));
+      };
+      const maybeSend = () => {
+        if (!begin || !initSeen || sent) return;
+        sent = true;
+        stages.push(label + "-sent");
+        ws.send(JSON.stringify(buildMessage(begin)));
+      };
+      const timer = setTimeout(
+        () => finishError(label + " timeout"),
+        timeoutMs
+      );
+      ws.onopen = () => stages.push("open");
       ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
         if (msg.begin) {
           begin = msg;
-          ws.send(JSON.stringify({ a: "f", c: msg.collectionID, d: msg.docID }));
-        } else if (msg.a === "f") {
+          stages.push("begin");
+          maybeSend();
+        } else if (msg.a === "init") {
+          initSeen = true;
+          stages.push("init");
+          maybeSend();
+        } else if (sent && accept(msg)) {
+          stages.push(label + "-recv");
           clearTimeout(timer);
           ws.close();
-          resolve({ begin, fetch: msg });
+          resolve({ begin, message: msg, stages });
         }
       };
-      ws.onerror = () => reject(new Error("snapshot websocket error"));
+      ws.onerror = () => finishError(label + " websocket error");
     });
+  }
+
+  async function fetchSnapshot() {
+    const result = await requestAfterInit(
+      "fetch",
+      (begin) => ({
+        a: "f",
+        c: begin.collectionID,
+        d: begin.docID,
+      }),
+      (msg) => msg.a === "f" && msg.data
+    );
+    return {
+      begin: result.begin,
+      fetch: result.message,
+      stages: result.stages,
+    };
   }
 
   const before = await fetchSnapshot();
@@ -190,29 +306,20 @@ async function writePopoSimpleCells(edits) {
     }
   }
 
-  const ack = await new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => reject(new Error("op timeout")), 15000);
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.begin) {
-        ws.send(JSON.stringify({
+  const ackResult = await requestAfterInit(
+    "op",
+    (begin) => ({
           a: "op",
-          c: msg.collectionID,
-          d: msg.docID,
+          c: begin.collectionID,
+          d: begin.docID,
           v: version,
           op,
-          src: msg.clientID,
+          src: begin.clientID,
           seq: 1,
-        }));
-      } else if (msg.a === "op") {
-        clearTimeout(timer);
-        ws.close();
-        resolve(msg);
-      }
-    };
-    ws.onerror = () => reject(new Error("op websocket error"));
-  });
+    }),
+    (msg) => msg.a === "op"
+  );
+  const ack = ackResult.message;
 
   if (ack.error) throw new Error(ack.error);
   return await fetchSnapshot();
@@ -226,10 +333,14 @@ Safe use checklist:
 3. Require `scanned_data_rows == total_data_rows`, then compare the complete live and frozen eligible
    key sets in both directions.
 4. Confirm names/headers from the same snapshot, not from stale screenshots.
-5. Build paths with internal ids: `sheetId`, `rowId`, and `colId`.
+5. Build paths with internal IDs from the same snapshot: `sheetId`, `rowId = sheet.rows[r]`, and
+   `colId = sheet.cols[c]`. Never use visual indexes in the cell key.
 6. For existing fields, include `od`; for blank fields, omit `od`.
 7. Preserve style-only keys such as `"100"` by setting only value/link fields.
-8. Verify from another full fresh snapshot and compare the entire eligible scope plus exact values.
+8. Give each target field an independent `ready`, `not_distributed`, or `blocked` state. Do not omit
+   ready sibling fields because one linked platform is unreadable.
+9. Verify from another full fresh snapshot and compare the entire eligible row/field scope plus exact
+   values; prove blocked fields stayed unchanged.
 
 Do not use this path for complex formatting, formulas, merged cells, protected ranges, or operations
 whose POPO data schema is unknown. Fall back to grid actions or UI workflows when the edit is more
@@ -306,7 +417,7 @@ Use `scripts/webbridge_command.ps1` for Windows WebBridge calls in POPO tasks wh
 - optionally copies returned screenshots from temp to a stable folder,
 - prevents large snapshot/evaluate responses from being truncated in the tool output.
 
-## Addressing Internals
+## UI Addressing Internals
 
 There is no reliable O(1) name-box addressing exposed through WebBridge. The reliable path is:
 

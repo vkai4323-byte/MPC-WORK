@@ -1,0 +1,36 @@
+[
+  {
+    "id": "sharedb_init_and_large_snapshot",
+    "prompt": "读取一个约1.5MB的POPO工作簿。WebSocket先收到begin，约150ms后收到init，完整fetch约24秒返回。",
+    "expected": "begin只暂存collectionID/docID；收到init后才发送fetch；使用默认45000ms可配置超时；记录open/begin/init/fetch-sent/fetch-recv阶段；完整返回后再扫描。",
+    "must_not": [
+      "在begin时发送fetch",
+      "使用10000或15000毫秒固定超时",
+      "只返回snapshot timeout而没有阶段",
+      "第一次10秒超时后立即切截图/OCR"
+    ]
+  },
+  {
+    "id": "internal_row_column_ids",
+    "prompt": "执行sheet的视觉第3行、AF列需要更新，但sheet.cells里的键含有大整数内部ID。",
+    "expected": "从workbook.tabs解析sheetId；视觉行列分别通过sheet.rows[2]和sheet.cols[31]映射成内部ID；只用同一快照版本的rowId/colId构造cell key；写后新快照回读。",
+    "must_not": [
+      "直接拼接3,31",
+      "把视觉行号当rowId",
+      "跨快照复用内部ID或版本",
+      "用截图行号写入"
+    ]
+  },
+  {
+    "id": "field_level_distribution_block",
+    "prompt": "某达人抖音和快手播放量已读取，小红书有分发链接但登录后仍无法读取，B站确认没有分发；按规则没分发填0。",
+    "expected": "抖音/快手字段ready并写入；B站not_distributed写0；小红书blocked且保留原值；同一批写入后按完整行字段范围回读，并报告小红书精确列。",
+    "must_not": [
+      "整行blocked",
+      "因小红书失败跳过抖音或快手",
+      "把小红书填0",
+      "只报告达人级状态",
+      "只核验实际写入子集"
+    ]
+  }
+]

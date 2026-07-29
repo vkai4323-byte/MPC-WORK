@@ -49,19 +49,32 @@
   {
     "id": "douyin_xingtu_refresh",
     "prompt": "读取执行 Sheet 中已发布的抖音记录，通过星图回收发布日期、播放、点赞、评论和分享并回填。达人名包含中英文和数字混排。",
-    "expected": "结构化读取并逐字保留 source_key；批量 item_id；使用 douyin-xingtu；按 item/author/star 身份证据；显式映射 metrics.play_count/like_count/comment_count/share_count 到目标列；任一请求字段缺失的 partial 整行 blocked；仅完整 ready 可写；全量覆盖核验。",
+    "expected": "结构化读取并逐字保留 source_key；批量 item_id；使用 douyin-xingtu；按 item/author/star 身份证据；显式映射 metrics.play_count/like_count/comment_count/share_count 到目标列；任一请求字段缺失只阻塞该字段，其他 exact ready 字段继续写；身份冲突才整行 blocked；按行和字段全量覆盖核验。",
     "must_not": [
       "用截图或 OCR 转写达人名",
       "点击达人卡片逐个采集",
       "按模糊昵称选第一个候选",
       "写入 conflict/ambiguous",
+      "因一个指标缺失跳过同一行其他已确认指标",
       "POPO 失败后重跑星图"
+    ]
+  },
+  {
+    "id": "distribution_field_level_blocking",
+    "prompt": "刷新执行 Sheet 的抖音、B站、小红书、快手播放量。某达人有小红书分发链接但页面无法读取，抖音和快手已成功拿到；没有分发的平台按规则填0。",
+    "expected": "按目标单元格独立记录 ready/not_distributed/blocked；小红书有链接但不可读只阻塞小红书并保留原值；抖音和快手照常写入；确认无分发的平台写0；写前后全表扫描并按行+平台列核验，报告 blocked 的精确达人和列。",
+    "must_not": [
+      "把整行标记 blocked",
+      "丢弃已确认的抖音或快手数据",
+      "把有链接但不可读的小红书填0",
+      "只报告达人级 ready/blocked",
+      "只核验实际写入的子集"
     ]
   },
   {
     "id": "refresh_overwrites_stale_values",
     "prompt": "把执行表所有符合条件的 B站和抖音播放量刷新到最新。部分单元格已有旧值，也必须更新。",
-    "expected": "冻结 refresh_existing + all_eligible + overwrite；研究所有符合条件的记录；已有非空值不得导致跳过；以 eligible=ready+blocked、ready=changed+unchanged 和 verified_ready=ready 核验。",
+    "expected": "冻结 refresh_existing + all_eligible + overwrite；研究所有符合条件的记录；已有非空值不得导致跳过；按字段以 eligible_fields=ready_fields+not_distributed_fields+blocked_fields、writable_fields=changed_fields+unchanged_fields 和 verified_ready_fields=ready_fields+not_distributed_fields 核验。",
     "must_not": [
       "把范围缩成 blank_only",
       "保留旧非空值",
@@ -143,7 +156,7 @@
   {
     "id": "bilibili_full_metrics_shortlink_exact_key",
     "prompt": "执行表里有 4 位 B站达人，其中两条发布链接是 b23.tv 短链。按表内原始达人名刷新 3 日播放、点赞、评论、分享和收藏。",
-    "expected": "逐字保留 source_key；每个 b23.tv 短链最多解析一次；按 BVID + owner MID 验证身份；从视频详情 stat 返回 play/like/reply/share/favorite；只写 exact ready 记录并完整回读五个字段。",
+    "expected": "逐字保留 source_key；每个 b23.tv 短链最多解析一次；按 BVID + owner MID 验证身份；从视频详情 stat 返回 play/like/reply/share/favorite；只写 exact ready 字段，缺失指标只阻塞对应字段，并完整回读五个字段范围。",
     "must_not": [
       "把 URL 当作 source_key",
       "把短链直接判为永久 invalid",

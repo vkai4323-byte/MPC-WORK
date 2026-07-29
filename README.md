@@ -10,6 +10,22 @@
 `popo-sheet` 负责表格读写、`douyin-xingtu` 负责星图取数的组合能力。Bilibili
 适配器直接包含在主流水线中。
 
+## 当前版本（2026-07-29）
+
+当前 `main` 包含本仓库完整可运行框架：
+
+- 三个协作 Skill：`research-sheet-pipeline`、`popo-sheet`、`douyin-xingtu`；
+- 飞书 Wiki、文档和电子表格的读取与文档 provider 适配；
+- Bilibili API 批量查询、达人检索和自测；
+- POPO ShareDB 的 `init` 等待、内部行列 ID 映射、精确写入及回读验证；
+- 字段级状态 `ready / not_distributed / blocked`。单个平台不可读取时，只阻塞对应字段，
+  不再阻塞同一行其他已经确认的平台数据。
+
+已经过两轮验证，包括静态/单元测试以及星图、Bilibili、飞书、POPO 的真实只读链路。
+可直接下载仓库内的
+[`MPC-WORK-complete-framework-2026-07-29.zip`](dist/MPC-WORK-complete-framework-2026-07-29.zip)，
+并使用同目录的 `.sha256` 文件校验完整性。
+
 ## 组成
 
 | Skill | 职责 | 主要能力 |

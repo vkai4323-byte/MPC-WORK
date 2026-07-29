@@ -310,7 +310,7 @@ Checkpoint summary:
 - eligible, source, and unique-record counts;
 - exact, normalized, duplicate, and ambiguous matches;
 - unresolved required fields;
-- records ready/skipped/blocked per side effect.
+- row identity status plus target fields ready/not-distributed/skipped/blocked per side effect.
 
 Stop affected side effects on duplicate exact keys or unresolved identity.
 
@@ -418,7 +418,7 @@ Use `$popo-sheet` for structured read/write semantics. Do not reconstruct ShareD
 |---|---|---|
 | Bridge disconnected | Connect once and recheck same tab. | Stop if still unavailable. |
 | Old page offline/read-only | Open the original URL once in a fresh task tab. | Stop if the fresh tab fails. |
-| Snapshot/op timeout | Retry same adapter stage after short backoff. | Two attempts total; no growing timeout. |
+| Snapshot/op timeout | Use `$popo-sheet`'s staged 45s default, inspect `open/begin/init/sent/recv`, then retry the same adapter stage after short backoff with fresh IDs/version. | Two attempts total; no ad hoc shorter/growing timeout. |
 | Fresh session fails gate/read | Preserve checkpoint and planned targets. | Stop and report resume action. |
 | Acknowledgement unknown | Lock destination and read actual state. | Retry unexplained delta once. |
 
@@ -445,10 +445,11 @@ Discard internal IDs/preconditions after any transport failure and rebuild from 
 1. Join with exact live `source_key`, never row number, OCR text, or `join_key`.
 2. Resolve each semantic field through the destination `field_map`; stop if two semantics map to one column or the live header/schema changed.
 3. Reject records whose `content_type` is not accepted by the destination.
-4. Reconcile all frozen eligible keys before submit.
-5. Preserve non-target fields/styles.
+4. Reconcile all frozen eligible row keys and target-field statuses before submit.
+5. Preserve non-target and blocked sibling fields/styles.
 6. Stop on duplicates, shifted headers, protected targets, or policy conflicts.
-7. Submit one batch with version/old-value preconditions.
+7. Submit one batch containing every ready/policy-approved `not_distributed` field with
+   version/old-value preconditions.
 8. Read back exact intended pairs.
 9. Keep verified rows out of retries.
 
@@ -459,9 +460,11 @@ Verification is against frozen scope, not only the produced change plan:
 1. Require `verification.readback=true` for every sheet, document, or create side effect; the flag cannot be disabled.
 2. Enumerate every data row again, then reapply the frozen eligibility predicate.
 3. Require `scanned_data_rows=total_data_rows` and exact eligible-key equality with the frozen set.
-4. Re-read requested output fields and compare exact key/value/link pairs with canonical records.
-5. Reconcile every eligible key as ready, skipped with an allowed reason, or blocked.
-6. Require `verified_ready = ready`.
+4. Re-read requested output fields and compare exact row/field/value/link pairs with canonical
+   records; prove blocked sibling fields stayed unchanged.
+5. Reconcile every eligible target field as ready, `not_distributed`, skipped with an allowed
+   reason, or blocked.
+6. Require every ready and policy-approved `not_distributed` field to be verified.
 7. Verify document structure/content policy/sharing.
 8. Retry unexplained mismatches once from fresh state.
 
@@ -470,8 +473,8 @@ Completion:
 ```text
 scanned_data_rows = total_data_rows
 eligible_keys_after = frozen_eligible_keys
-eligible = ready + skipped + blocked
-verified_ready = ready
+eligible_fields = ready_fields + not_distributed_fields + skipped_fields + blocked_fields
+verified_ready_fields = ready_fields + not_distributed_fields
 unexplained_mismatches = 0
 ```
 

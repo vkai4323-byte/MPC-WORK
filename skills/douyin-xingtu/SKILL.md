@@ -1,15 +1,59 @@
 ---
 name: douyin-xingtu
-description: Retrieve authenticated, read-only Douyin creator, published-video, pricing, ranking, content, and task-report data from 巨量星图 through the user's Kimi WebBridge browser session. Use for 星图达人检索、抖音发布链接批量回收、作品播放/互动数据、发布日期核对、作品ID与达人身份交叉校验、达人报价与预期CPM、达人榜单、内容灵感或星图任务报告；also use when research-sheet-pipeline needs verified Xingtu records for sheet writeback. Do not use for ordering, publishing tasks, changing creator lists, finance, settlement, or audience pushes.
+description: Retrieve authenticated, read-only Douyin Xingtu creator search, pricing, recent-video, ranking, content, and task-report data. Screen similar creators from the user's actual campaign purpose with non-negotiable eligibility gates, content review, and transparent tiers. Prefer the reusable direct HTTP client with a Windows-DPAPI encrypted session; use Kimi WebBridge only for initial request capture, expired-session recovery, CAPTCHA, or interface repair. Use for 星图达人检索、相似达人筛选、COSER投放、达人报价、近期视频播放量、榜单、内容灵感、任务报告、作品ID与达人身份核验。
 ---
 
 # Douyin Xingtu
 
-Use the bundled read-only client instead of rebuilding Xingtu requests in chat.
+Prefer the reusable direct client. Do not drive the browser per record.
 
-## Run the shortest command
+## Direct client
 
 Run from this skill directory:
+
+```powershell
+python scripts/xingtu_direct.py status
+python scripts/xingtu_direct.py self-test
+python scripts/xingtu_direct.py search --keyword "搞笑剧情" --search-type content --pages 3 --output results.json
+python scripts/xingtu_direct.py search --keyword "虎纹章鱼" --search-type nickname --output target.json
+python scripts/xingtu_direct.py items --item-id 7666679758713954118 --output items.json
+```
+
+The direct client:
+
+- calls only allowlisted Xingtu read endpoints;
+- decrypts the session only in memory;
+- retries bounded `429/502/503/504` responses;
+- returns `auth_required:xingtu_session_expired` on explicit session expiry;
+- never logs cookies, request headers, tokens, or advertiser account identifiers.
+
+### Initialize or refresh the session
+
+Only when the user explicitly authorizes a reusable direct session:
+
+1. Ask the user to open the authenticated creator market once.
+2. Capture `POST /gw/api/gsearch/search_for_author_square` with **Copy as cURL (bash)**.
+3. Pipe the cURL text to:
+
+```powershell
+Get-Clipboard -Raw | python scripts/xingtu_direct.py import-curl
+```
+
+`import-curl` stores the session and search template at
+`%LOCALAPPDATA%\Codex\XingtuDirect\session.dpapi`, encrypted with Windows DPAPI for the current
+Windows user. Never store plaintext cURL, cookies, or headers. Do not delete the encrypted session
+after a normal read; retain it for reuse until the user asks to remove it or the session expires.
+
+Run `self-test` after import. Do not request another capture while `self-test` returns `ready`.
+
+## WebBridge fallback
+
+Use the bundled browser client only when:
+
+- no direct session exists and the user declines encrypted persistence;
+- direct `self-test` returns `auth_required`;
+- CAPTCHA or login interaction is required;
+- Xingtu changed a request schema and the direct client must be repaired.
 
 ```powershell
 python scripts/xingtu_batch.py self-test
@@ -20,65 +64,97 @@ python scripts/xingtu_batch.py ranking --output ranking.json
 python scripts/xingtu_batch.py task-reports --output task-reports.json
 ```
 
-The script talks only to the local Kimi WebBridge daemon and reuses the user's authenticated browser state. Never request, print, or persist cookies, tokens, request headers, account IDs, or credentials.
+Never use Computer Use or UI clicking for production batch retrieval.
 
-## Choose the identity path
+## Identity and metrics
 
-1. If a published-video URL or `item_id` and expected creator name are known, use `published-items`. It cross-checks item `author_id`, candidate `core_user_id`, `star_id`, and membership in `last_10_items` or representative `items`.
-2. If only a Douyin video URL or `item_id` is known, use `items`. Treat the item ID as the primary identity.
-3. If only a creator name, Douyin ID, or Xingtu ID is known, use `authors`. Do not auto-select the first candidate.
-4. Use creator identity in this order: exact `item_id -> author_id/core_user_id -> star_id -> exact display name`.
-5. Preserve the user's original `source_key` and display name byte-for-byte. Keep normalized matching values separate.
-6. Stop the affected record on `ambiguous`, `identity_conflict`, `metric_conflict`, `not_found`,
+1. Prefer exact `item_id -> author_id/core_user_id -> star_id -> exact display name`.
+2. Do not select the first nickname result automatically.
+3. Preserve source keys separately from normalized matching values.
+4. Stop affected records on `ambiguous`, `identity_conflict`, `metric_conflict`, `not_found`,
    `auth_required`, or `page_not_ready`.
+5. Prefer item-detail `stats.watch_cnt` for current plays.
+6. Preserve creator-search `last_10_items.vv` as a separate cached observation when it differs.
+7. Record `observed_at`, endpoint, and source field for writable metrics.
+8. Treat signed cover/share URLs as ephemeral evidence.
 
-Read [references/output-contract.md](references/output-contract.md) before composing with another skill or writing to a sheet. Read [references/xingtu-observed-api.md](references/xingtu-observed-api.md) only when extending or repairing the client.
+Read [references/output-contract.md](references/output-contract.md) before sheet writeback.
+Read [references/xingtu-observed-api.md](references/xingtu-observed-api.md) when extending or
+repairing the direct client.
 
-## Interpret metrics safely
+## Similar-creator research
 
-- Use `item_publish_time` when a creator-search result provides it.
-- Otherwise expose `create_time` as `publish_time` with its exact source field; do not claim it is a separately verified scheduled publish time.
-- Prefer item-detail `stats.watch_cnt` for current plays.
-- Record `observed_at`, endpoint, and source field for every writable metric.
-- For `published-items`, treat item-detail `stats.watch_cnt` as the documented current-play source. Preserve differing cached summaries in `observations`, add `metric_resolution`, and warn explicitly. Add `--strict-conflicts` when any cross-surface difference must block the record as `metric_conflict`.
-- Keep conflicts field-scoped. An unrelated item-play conflict is a warning for a pricing-only creator query, not a blocker.
-- Treat signed cover/share URLs as ephemeral evidence, not durable IDs.
+Read [references/multi-pass-retrieval.md](references/multi-pass-retrieval.md) before every
+similar-creator or campaign-fit search. Read
+[references/similar-creator-screening.md](references/similar-creator-screening.md) additionally
+when the hard gate or final review needs domain-specific interpretation.
 
-## Bounded workflow
+### Purpose before similarity
 
-1. Run `self-test` once.
-2. Require the authenticated creator index at `https://www.xingtu.cn/ad/creator/index` and confirm
-   its creator search control is rendered; a generic homepage or legacy market route is not ready.
-3. Batch known item IDs in one `items` call.
-4. Search unresolved creators serially because one browser tab owns the search state.
-5. Retry one failed read once. Do not open extra sessions or reverse-engineer new endpoints during a production run.
-6. Return compact JSON and let the caller decide whether to write.
+Identify why the user chose the reference creator. Convert that campaign purpose into a
+non-negotiable eligibility gate before searching.
 
-## Failure branches
+- If the purpose is producing COS content, `active real-person COSER` is the gate.
+- Beauty, humor, abstraction, acting, price, and reach are secondary ranking dimensions.
+- Never replace a failed gate with a high secondary score.
+- If too few candidates pass, expand recall. Do not relax the gate or fill the quota with adjacent
+  non-COS accounts.
 
-| Trigger | First recovery | If still unresolved |
-|---|---|---|
-| Creator index path is correct but no visible enabled search control renders | Let `self-test` finish its bounded readiness poll. | Return `page_not_ready`, never `auth_required`. |
-| HTTP cannot resolve a Douyin short URL | Resolve once in a temporary browser tab, close it, and restore Xingtu. | Return `not_found: unresolved_item_id`. |
-| URL-filter creator search produces no network response | Fill the visible creator-search input and submit once. | Return `error: search_response_not_observed`. |
-| Item belongs to a different `core_user_id` | Preserve both IDs and stop. | Return `identity_conflict`; never write. |
-| Multiple candidates contain the same item ID | Preserve candidates and stop. | Return `ambiguous`; never select by position. |
+### Evidence hierarchy
+
+Use evidence in this order:
+
+1. recent item covers and titles;
+2. representative items and recent publishing consistency;
+3. creator labels and query hits as recall signals only.
+
+Keyword counts are title-match counts, not proof that a creator lacks or has a capability. Label
+them explicitly in deliverables, for example `近10条标题COS命中`.
+
+### Candidate workflow
+
+1. Write required, preferred, and excluded traits.
+2. Inspect the reference creator before inventing search terms.
+3. Run orthogonal retrieval passes: broad theme, identity/format, behavior/mechanism, and
+   external-seed recovery when useful.
+4. Merge every pass and deduplicate by `core_user_id`; retain query/pass provenance.
+5. Apply the hard gate before similarity scoring.
+6. Fetch recent-item detail only for the review pool, then inspect covers/titles for every
+   finalist.
+7. Exclude conflicting account types discovered during review.
+8. Tier only the passing set. For COS campaigns, use:
+   - `核心相似`: active COS plus humor, contrast, acting, or narrative performance;
+   - `稳定COS`: high recent COS consistency but weaker performance/abstract traits;
+   - `可投COS`: real-person COS is established, but role fit needs a second-round sample review.
+9. Deliver requested metrics with blanks and status notes for unavailable fields. Never invent
+   prices or plays.
+
+Do not fetch expensive item detail for the entire recall pool. Use search summaries to narrow the
+pool first, then enrich finalists.
+
+COS example commands after direct-session readiness:
+
+```powershell
+python scripts/xingtu_direct.py search --keyword "coser" --search-type content --pages 10 --output coser.json
+python scripts/xingtu_direct.py search --keyword "女coser" --search-type content --pages 10 --output female-coser.json
+python scripts/xingtu_direct.py search --keyword "二次元cos" --search-type content --pages 10 --output acg-cos.json
+python scripts/xingtu_prepare_review.py --input candidates.json --output review.json --creators 100 --items-per-creator 2 --personal-only
+python scripts/xingtu_download_review_covers.py --input review.json --output-dir covers --creators 100
+```
 
 ## Hard safety boundary
 
 Allowed:
 
-- Xingtu market navigation;
-- network observation of the search request initiated by that page;
-- read-only GET requests executed inside the authenticated Xingtu page;
-- the page's search-only POST request;
-- local JSON input/output.
+- authenticated Xingtu creator-market reads;
+- allowlisted read-only GET requests;
+- creator/content search POST requests;
+- local JSON and spreadsheet outputs;
+- user-authorized DPAPI-encrypted session persistence.
 
-Never call or automate:
+Never automate:
 
-- 下单、发布任务、创建或修改达人清单；
-- 财务、余额、结算、充值、退款；
-- 项目状态修改、消息发送、人群推送；
-- permission, account, qualification, or collaboration changes.
-
-If a requested operation crosses this boundary, stop and ask for a separate explicit authorization and a purpose-built workflow.
+- orders, task publishing, or creator-list mutation;
+- finance, balance, settlement, recharge, or refunds;
+- project state changes, messages, or audience pushes;
+- permission, qualification, account, or collaboration changes.

@@ -2390,8 +2390,9 @@ def compose(job: dict) -> dict:
 
     if "verify" in chain:
         checkpoints.append(
-            "Verify fresh state and prove eligible = ready + skipped + blocked "
-            "with zero unexplained mismatches."
+            "Verify fresh state and prove eligible_fields = ready_fields + "
+            "not_distributed_fields + skipped_fields + blocked_fields with "
+            "zero unexplained mismatches."
         )
 
     checkpoints.append(
@@ -2513,7 +2514,10 @@ def compose(job: dict) -> dict:
             for item in destinations
             if item.get("type") == "sheet"
         },
-        "coverage_equation": "eligible = ready + skipped + blocked",
+        "coverage_equation": (
+            "eligible_fields = ready_fields + not_distributed_fields + "
+            "skipped_fields + blocked_fields"
+        ),
         "verification_scope": (
             "all_eligible" if verification.get("coverage") else "planned_outputs"
         ),

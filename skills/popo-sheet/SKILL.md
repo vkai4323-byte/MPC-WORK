@@ -1,6 +1,6 @@
 ---
 name: popo-sheet
-description: Operate NetEase POPO / office.netease.com online spreadsheets through the user's authenticated Kimi WebBridge browser session. Use for POPO sheet URLs, structured cell reads, exact-key batch fills, formulas, hyperlinks, row/column sizing, borders, wrap, formatting, sheet tabs, and safe UI fallback on canvas-rendered grids.
+description: Operate NetEase POPO / office.netease.com online spreadsheets through the user's authenticated Kimi WebBridge browser session. Use for POPO sheet URLs, structured cell reads, exact-key and field-level batch fills, multi-platform metric refreshes, formulas, hyperlinks, row/column sizing, borders, wrap, formatting, sheet tabs, and safe UI fallback on canvas-rendered grids.
 ---
 
 # POPO Sheet via Kimi WebBridge
@@ -17,6 +17,24 @@ POPO grids are canvas-rendered inside a cross-origin `office.netease.com` iframe
 
 Do not run both lanes “for safety”. A structurally verified value write needs no screenshot, focus
 probe, clipboard test, or per-cell click.
+
+## Make each target field independent
+
+Use the target cell/field—not the whole row—as the default readiness and write unit. Freeze each
+field with its exact row key, target column, desired value, evidence/source, observation time, and
+one status:
+
+- `ready`: exact value is available and writable;
+- `not_distributed`: absence is proven and the declared policy permits writing `0`;
+- `blocked`: a source/link exists but the value is unavailable, ambiguous, or conflicting.
+
+Write `ready` and policy-approved `not_distributed` fields even when another field in the same row is
+`blocked`. Leave blocked fields unchanged and report them by row plus platform/column. Block the
+whole row only when the row identity/exact key is ambiguous, duplicated, or changed, or when the user
+explicitly declares a row-atomic contract.
+
+Do not treat “unreadable” as “not distributed”. Do not infer “latest” from the largest number. Use
+the declared authoritative source and compare `observed_at` when timestamps exist.
 
 ## Fresh task tab — mandatory for mutation
 
@@ -44,9 +62,9 @@ scanned_data_rows = total_data_rows
 filter_after_full_scan = true
 ```
 
-Freeze internal `row_id`, byte-for-byte `source_key`, platform/source values, targets, and policy.
-Matches may be non-contiguous. Stop on partial scan, blank/duplicate exact key, duplicate row ID,
-missing header, or read-only/protected state.
+Freeze internal `row_id`, byte-for-byte `source_key`, platform/source values, per-field targets,
+evidence/`observed_at`, and policy. Matches may be non-contiguous. Stop on partial scan,
+blank/duplicate exact key, duplicate row ID, missing header, or read-only/protected state.
 
 Never use viewport rows, first matching block, fixed upper bounds, `slice`, early `break`, screenshots,
 OCR, visual row numbers, or normalized names to form writable scope.
@@ -58,7 +76,8 @@ Immediately before writing:
 1. Fetch a new snapshot/version and repeat the full scan.
 2. Require live and frozen eligible key sets to be exactly equal in both directions.
 3. Resolve current sheet/row/column IDs and old values from that snapshot.
-4. Build one JSON0 batch for the approved targets, preserving non-target fields and styles.
+4. Build one JSON0 batch for every approved `ready`/`not_distributed` field, preserving blocked and
+   non-target fields and all styles.
 5. Submit once with old-value preconditions.
 
 On unknown acknowledgement, keep one writer and read actual state before one delta retry. Never reuse
@@ -74,12 +93,13 @@ Fetch another snapshot, repeat the full scan, and compare every requested key/va
 ```text
 scanned_row_ids = live_data_row_ids
 eligible_keys_after = frozen_eligible_keys
-verified_ready = ready
+eligible_fields = ready_fields + not_distributed_fields + blocked_fields
+verified_ready_fields = ready_fields + not_distributed_fields
 unexplained_mismatches = 0
 ```
 
-Derive the denominator from the live post-scan scope, never from the write plan. Skip screenshots
-after a successful plain value/link verification.
+Derive row and field denominators from the live post-scan scope, never from the write plan. Skip
+screenshots after a successful plain value/link verification.
 
 ## UI lane
 
@@ -100,6 +120,12 @@ number/date format, and hyperlink convention.
 - Never mutate from an old offline/read-only page.
 - Never filter a partial row sample or assume equal dates form one block.
 - Never use external row numbers, OCR, screenshots, or normalized names as keys.
+- Never use visual row/column numbers as ShareDB cell IDs; resolve IDs through `sheet.rows[]` and
+  `sheet.cols[]`.
+- Never send fetch/op before the ShareDB `init` message.
+- Never let one blocked platform/field suppress verified fields in the same row unless the contract
+  is explicitly row-atomic.
+- Never write `0` for an unreadable linked distribution.
 - Never click hyperlink cells unless the user asked to open them.
 - Never continue after a protected/read-only warning.
 - Never start a second writer while the first result is unknown.

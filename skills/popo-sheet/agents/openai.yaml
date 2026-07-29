@@ -1,0 +1,4 @@
+interface:
+  display_name: "POPO Sheet"
+  short_description: "Safely read and update NetEase POPO sheets"
+  default_prompt: "Use $popo-sheet to read or update this POPO sheet with exact field-level verification."

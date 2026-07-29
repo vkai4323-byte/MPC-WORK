@@ -114,7 +114,8 @@ Chain: `sheet_context -> web_research -> normalize -> sheet_writeback -> verify`
    target columns; freeze only after the full scan.
 3. Load `$douyin-xingtu`, self-test once, then run one `published-items`/item batch.
 4. Join by unchanged `source_key`; use item/author/star IDs for evidence.
-5. Write only `ready`; keep other statuses blocked with reasons.
+5. Write only exact `ready` fields and policy-approved `not_distributed` fields; preserve blocked
+   sibling fields with row + target-field reasons.
 6. Convert dates/counts to the visible convention, re-scan fresh POPO state, submit one batch, and
    verify exact values plus full eligible-key coverage.
 

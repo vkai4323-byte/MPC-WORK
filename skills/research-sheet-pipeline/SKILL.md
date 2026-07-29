@@ -12,9 +12,15 @@ Default to the fixed fast path. Adapter count does not make a job complex.
 | Data/action | Owner |
 |---|---|
 | POPO read/write | `$popo-sheet` in one `$kimi-webbridge` task session |
+| Any Feishu online document work | official `lark-cli` via `scripts/document_provider.py` |
 | Bilibili video/creator data | bundled `scripts/bilibili_batch.py` |
 | Douyin/Xingtu data | `$douyin-xingtu` |
 | Documents or unknown providers | complex path |
+
+Any `feishu.cn`, `larksuite.com`, or compatible `/wiki/`, `/docx/`, `/sheets/`,
+`/base/`, `/bitable/`, `/slides/`, `/drive/` resource must first read
+`references/feishu-cli.md`. Do not use a browser bridge to read or mutate Feishu
+online documents.
 
 Load selected companion skills. Do not load pipeline references for the fixed path.
 
@@ -67,9 +73,10 @@ self-test and one batch; deduplicate canonical item IDs inside that batch.
 - Douyin/Xingtu published item: `$douyin-xingtu published-items`.
 - Other authenticated source: one bounded `$kimi-webbridge` fallback.
 
-Normalize only into a comparison-only `join_key`. Merge results only by exact `source_key` and keep
-each record as `ready` or `blocked` with evidence/error. Never invent identity or discard one
-platform because another failed.
+Normalize only into a comparison-only `join_key`. Merge results only by exact `source_key`. Keep row
+identity status separately from per-target field status. For every target field retain
+`ready`, `not_distributed`, or `blocked`, plus source, `observed_at`, and evidence/error. Never invent
+identity or discard one platform/field because another failed.
 
 Before writeback, normalize adapter fields into the declared targets:
 
@@ -82,9 +89,19 @@ Before writeback, normalize adapter fields into the declared targets:
 | favorites | `favorite_count` | `metrics.favorite_count` |
 | publish time, only if requested | `pubdate` | `metrics.publish_time` |
 
-For each record, every declared target must be present and non-null. Otherwise convert it to
-`blocked`; a five-field refresh never writes a `partial` four-field row or shifts values between
-columns.
+Map every adapter field explicitly by semantic name; never positionally shift values when a field is
+missing. A missing/ambiguous field blocks only that target field. Write other exact ready fields in
+the same row. Block the whole row only for duplicate/ambiguous identity or an explicitly declared
+row-atomic contract.
+
+For distribution-platform refreshes:
+
+- no distribution link + policy says “没有的填0” → `not_distributed`, value `0`;
+- distribution link exists but cannot be read → `blocked`, preserve the current cell;
+- another platform in that row is `ready` → still write and verify it.
+
+Choose an authoritative source before comparing values. “Latest” means the newest observation from
+that source (or the user's declared source hierarchy), not the largest number.
 
 Do not rerun verified research because sheet transport later fails.
 
@@ -97,7 +114,8 @@ live_eligible_keys - frozen_eligible_keys = empty
 frozen_eligible_keys - live_eligible_keys = empty
 ```
 
-It then resolves current IDs/version and writes all ready records in one preconditioned batch.
+It then resolves current IDs/version and writes all ready fields plus policy-approved
+`not_distributed` fields in one preconditioned batch. Blocked sibling fields remain unchanged.
 There is exactly one writer. On unknown acknowledgement, read actual state before one delta retry.
 If the bound tab has gone offline, `$popo-sheet` opens one fresh replacement instead of refreshing
 the stale page.
@@ -112,9 +130,9 @@ Completion requires:
 ```text
 scanned_row_ids = live_data_row_ids
 eligible_keys_after = frozen_eligible_keys
-eligible = ready + blocked
-ready = changed + unchanged
-verified_ready = ready
+eligible_fields = ready_fields + not_distributed_fields + blocked_fields
+writable_fields = changed_fields + unchanged_fields
+verified_ready_fields = ready_fields + not_distributed_fields
 unexplained_mismatches = 0
 ```
 
@@ -137,11 +155,14 @@ references. Keep normal artifacts to `checkpoint.json`, final change plan, and v
 - Never use screenshots, OCR, row numbers, or normalized names as writable keys.
 - Never reuse an old offline/read-only POPO tab for mutation.
 - Never reconstruct owner-specific POPO/Xingtu transport in this pipeline.
+- Never suppress ready fields because another platform/field in the same row is blocked.
+- Never treat an unreadable linked distribution as not distributed or write `0` for it.
 - Never start a second writer while the first result is unknown.
 - Never report completion from acknowledgement, screenshot, or subset verification.
 - Never persist credentials, disposable tokens, raw workbook snapshots, or unnecessary debug files.
 
 ## Report
 
-Report total/scanned rows, frozen/live eligible count, platform batch counts, ready/blocked and
-changed/unchanged counts, rows/cells written, full readback result, and unresolved exact keys.
+Report total/scanned rows, frozen/live eligible count, platform batch counts, field-level
+ready/not-distributed/blocked and changed/unchanged counts, rows/cells written, full readback result,
+and unresolved exact row + platform/column keys.

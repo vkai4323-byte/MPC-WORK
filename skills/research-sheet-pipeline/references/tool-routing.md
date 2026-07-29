@@ -18,7 +18,7 @@
 | Public Bilibili videos, creators, or search | `scripts/bilibili_batch.py` | `$kimi-webbridge` for unresolved items only |
 | Authenticated Douyin/Xingtu data | `$douyin-xingtu` with its authenticated browser session | Stop the Xingtu stage if login is unavailable |
 | Other login-dependent social research | `$kimi-webbridge` | Stop with disclosure if login is unavailable |
-| Feishu documents | `scripts/document_provider.py` + ready provider | Capability-equivalent authenticated connector; otherwise stop `document` |
+| Any Feishu online document | official `lark-cli` through `scripts/document_provider.py` | bundled CLI adapter for compatible operations; otherwise stop the affected stage |
 | `.xlsx`, `.csv`, `.tsv` | `$spreadsheets` | None |
 | Public non-login facts | Suitable API or built-in web research | Browser only when user-visible state matters |
 
@@ -32,7 +32,7 @@ Map each module to one primary tool before the first side effect:
 
 - Bilibili: resolve workspace Python, then run `python scripts/bilibili_batch.py --self-test` from this skill directory. Do not probe a different global interpreter.
 - Douyin/Xingtu: load `$douyin-xingtu`, run `python scripts/xingtu_batch.py self-test` once from its directory, and reuse its authenticated session.
-- Feishu: read `document-providers.md`, run the resolver, and keep manifest validity separate from provider readiness. Never expose a command path, `.env`, or secret.
+- Feishu: read `feishu-cli.md` and `document-providers.md`, resolve the official CLI, then read its embedded version-matched domain skill. Keep tool capability, account scope, document ACL, and target preflight as separate checks. Never expose a command path, profile, `.env`, token, or secret.
 - Browser/sheet: start one task session, open the supplied POPO URL with `newTab:true`, then capability-check the exact structured read/write verbs on that fresh tab. Do not borrow an earlier POPO tab for mutation. If an old tab is offline/read-only, open the original URL once in a new task tab; if a verb is absent there, stop the stage.
 - If a shell call yields a cell ID, wait immediately. Poll at most 60 seconds at a time; after two no-progress polls, terminate it and take one stated fallback.
 
@@ -110,9 +110,11 @@ For Douyin/Xingtu, pass known item URLs/IDs to `$douyin-xingtu` in one batch. Pr
 - adapter status;
 - endpoint, returned source field, observation time, and alternative observations.
 
-Only `ready` records are writable. Never downgrade `ambiguous`, `identity_conflict`, or `metric_conflict` to a name-only match.
+Only exact `ready` fields and policy-approved `not_distributed` fields are writable. A
+field-level `metric_conflict` blocks that field; `ambiguous`/`identity_conflict` blocks the row.
+Never downgrade any of them to a name-only match, and never suppress unrelated ready fields.
 
-## Portable Feishu provider
+## Official Feishu CLI provider
 
 Run from this skill directory:
 
@@ -120,13 +122,33 @@ Run from this skill directory:
 python scripts/document_provider.py --format json
 ```
 
-Use a `ready` bundled result or a `legacy_unverified` external CLI only after read-only target/capability preflight. If the resolver reports `needs_credentials` or `unavailable`, capability-check an authenticated connector. Require the exact job capabilities; distinguish public-permission read and `anyone_editable` from arbitrary sharing.
+Use a `ready` official CLI result and still perform a read-only preflight against the exact
+resource. `doctor` proves configuration and identity availability, not every scope or document
+ACL. Require the exact job capabilities and keep tool support, granted scope, and target access
+as separate states.
 
-If no route covers copy, grouped replacement/dry-run, requested permission, exact read-back, and structural signature, stop only `document`.
+Invoke every Feishu domain through the same resolved provider:
 
-The bundled `scripts/feishu_doc.py` contains no credentials. Run `doctor` before mutation. Never ask for or print `FEISHU_APP_SECRET`; tell the user to configure it locally. Always dry-run replacement maps. The apply command supports an idempotency token and verifies content plus an inline-style-aware structural signature. Separately verify permission changes.
+```powershell
+python scripts/document_provider.py --run -- drive +inspect --url "<feishu-url>"
+python scripts/document_provider.py --run -- docs +fetch --doc "<doc-url>"
+python scripts/document_provider.py --run -- sheets +workbook-info --url "<wiki-or-sheet-url>"
+python scripts/document_provider.py --run -- sheets +csv-get --url "<wiki-or-sheet-url>" --sheet-id "<exact-id>" --range "A1:Z200"
+```
 
-Browser document editing is not a fallback.
+Before using a domain, run `lark-cli skills read lark-shared`, then read the matching embedded
+skill and every operation-specific reference it names. Prefer `+` shortcuts, then typed API
+commands, then the official CLI's raw `api` escape hatch. For Sheets, start with
+`+workbook-info`, use a returned stable `sheet_id`, prefer `+batch-update` for related mutations,
+and read back every changed range.
+
+If no CLI route covers the requested action, stop only the affected Feishu stage.
+
+The official CLI provides structured JSON, schema discovery, risk levels, dry-run, versioned
+skills, and raw OpenAPI access. The bundled `scripts/feishu_doc.py` contains no credentials and
+remains only a compatibility fallback.
+
+Browser reading or editing is never a fallback for Feishu online-document work.
 
 ## Output and artifact budget
 

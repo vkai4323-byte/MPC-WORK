@@ -53,14 +53,16 @@ Every item-oriented result uses this shape:
 | `partial` | Exact identity exists but at least one requested field is unavailable. | Write only explicitly allowed fields. |
 | `ambiguous` | Multiple creator candidates remain. | Do not auto-select or write. |
 | `identity_conflict` | Item `author_id` and selected creator `core_user_id` disagree. | Preserve both identities and do not write. |
-| `metric_conflict` | Multiple Xingtu surfaces disagree on a writable metric. | Preserve observations and stop the record. |
+| `metric_conflict` | Multiple Xingtu surfaces disagree on a writable metric. | Preserve observations and block the conflicting field; block the row only under an explicit row-atomic policy. |
 | `not_found` | No item or creator was returned. | Leave destination blank. |
 | `page_not_ready` | Creator-index navigation or its visible search control did not become ready. | Stop/retry the readiness check once; do not label it a login failure. |
 | `auth_required` | An explicit login surface or API 401/403 shows authentication is unavailable. | Stop the Xingtu stage. |
 | `error` | Transport or schema failure. | Retry the read once, then stop. |
 
-When a caller declares a fixed target set, `partial` is writable only if every declared target is
-present. Otherwise the caller must convert the record to `blocked`.
+When a caller declares a fixed target set, map fields by semantic name. Convert each missing,
+ambiguous, or conflicting target field to `blocked`; keep exact present fields `ready`. Do not shift
+values positionally and do not convert the whole record to `blocked` unless identity is unresolved or
+the caller explicitly declares a row-atomic policy.
 
 ## Input forms
 

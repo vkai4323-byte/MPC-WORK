@@ -12,7 +12,17 @@ Freeze these before research:
 - exact key column;
 - platform/source URL or ID columns;
 - target columns;
+- per-target evidence source and `observed_at` when available;
 - `overwrite` for refresh or `preserve_nonempty` for fill-missing.
+
+Default to field-atomic execution. Give every target field one status:
+
+- `ready`: exact value available;
+- `not_distributed`: absence proven and policy permits `0`;
+- `blocked`: linked source exists but is unreadable, ambiguous, conflicting, or missing.
+
+Do not block verified fields because a sibling platform/field is blocked. Use a row-atomic contract
+only when the user or schema explicitly makes the fields inseparable.
 
 ## 0. Open one fresh task tab
 
@@ -32,12 +42,19 @@ From the top frame:
 
 1. Read the office iframe URL and its `identity`, `source`, and locale.
 2. Connect to the office ShareDB WebSocket.
-3. On `begin`, send the fetch message using its `collectionID` and `docID`.
-4. Keep the returned workbook plus version `v`; do not print or persist the full snapshot.
-5. Resolve the requested live tab by ID/title.
-6. Resolve headers from the live header row and columns vector.
-7. Set `live_data_row_ids` to every row ID after the header.
-8. Visit every ID exactly once, then assert:
+3. Record `collectionID`/`docID` from `begin`, wait for ShareDB `init`, then send the fetch. Requests
+   sent before `init` may be silently dropped.
+4. Use a configurable snapshot timeout with a 45,000 ms default. Track
+   `open/begin/init/fetch-sent/fetch-recv`; include the stages in timeout/error messages. Large
+   workbooks can need more than 30 seconds.
+5. Keep the returned workbook plus version `v`; do not print or persist the full snapshot.
+6. Resolve the requested live tab by ID/title. `workbook.tabs` is the visual-order array of sheet ID
+   strings.
+7. Resolve headers from the live header row and columns vector.
+8. Resolve cell keys only through internal IDs: visual row `r` maps to `sheet.rows[r]`; visual column
+   `c` maps to `sheet.cols[c]`. Never compose keys from visual indexes.
+9. Set `live_data_row_ids` to every row ID after the header.
+10. Visit every ID exactly once, then assert:
 
 ```text
 scanned_row_ids = live_data_row_ids
@@ -55,12 +72,22 @@ Freeze each match as:
   "row_id": "internal structured row id",
   "source_key": "byte-for-byte sheet value",
   "platform": "sheet value",
-  "publish_url": "sheet value or link metadata"
+  "publish_url": "sheet value or link metadata",
+  "fields": {
+    "target header": {
+      "status": "ready | not_distributed | blocked",
+      "value": "exact desired value when writable",
+      "source": "authoritative source",
+      "observed_at": "source observation time",
+      "reason": "required when blocked"
+    }
+  }
 }
 ```
 
 Stop on a duplicate/blank exact key, duplicate row ID, missing header, or partial scan. Row indexes are
-diagnostics only. Matches may be non-contiguous.
+diagnostics only. Matches may be non-contiguous. A row identity failure blocks the row; a single
+field-source failure blocks only that field.
 
 ## S1. One conditional batch write
 
@@ -75,11 +102,13 @@ frozen_eligible_keys - live_eligible_keys = empty
 ```
 
 3. Resolve current sheet, row, column IDs, values, and version from this snapshot.
-4. Build one JSON0 op for ready records only.
+4. Build one JSON0 op for all `ready` fields and policy-approved `not_distributed` fields. Preserve
+   blocked fields unchanged.
 5. For an existing field include its old value (`od`); for a blank field omit `od`.
 6. Change only value/link fields and preserve style keys.
 7. For a hyperlink, follow the live neighboring-cell convention for value and link metadata.
-8. Submit one op using the fresh version, `clientID`, and one sequence.
+8. Open the writer socket, record `begin`, wait for `init`, then submit one op using the fresh
+   version, `clientID`, and one sequence. Use a configurable 45,000 ms op timeout and stage trace.
 
 If acknowledgement is unknown, keep a single writer, fetch actual state, and retry only unexplained
 delta once. Never reuse version or internal IDs after a transport failure.
@@ -91,15 +120,18 @@ Fetch one more new snapshot. Repeat the complete scan and predicate; then requir
 ```text
 scanned_row_ids = live_data_row_ids
 eligible_keys_after = frozen_eligible_keys
-verified_ready = ready
+eligible_fields = ready_fields + not_distributed_fields + blocked_fields
+verified_ready_fields = ready_fields + not_distributed_fields
 unexplained_mismatches = 0
 ```
 
-Compare every requested field for every ready key. Derive counts from the compared records, not from
-the write-plan length. A subset with zero mismatches is failure, not completion.
+Compare every writable field for every ready key and prove blocked fields were unchanged. Derive
+counts from the live row/field scope, not from the write-plan length. A subset with zero mismatches
+is failure, not completion.
 
-Return only: sheet, total/scanned row counts, eligible count and exact keys, ready/blocked counts,
-rows/cells updated, mismatches, and status. Derive every count from live records.
+Return only: sheet, total/scanned row counts, eligible count and exact keys, field-level
+ready/not-distributed/blocked counts, rows/cells updated, unchanged blocked cells, mismatches, and
+status. Include unresolved row + platform/column keys. Derive every count from live records.
 
 No screenshot, focus probe, clipboard operation, per-cell click, raw snapshot artifact, manifest, or
 checkpoint is needed after successful structural verification.
