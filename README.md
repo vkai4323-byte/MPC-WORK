@@ -1,7 +1,7 @@
 # MPC-WORK
 
 面向达人与内容数据回收的 Codex Skill 套件。它把 POPO 在线执行表、Bilibili
-公开接口的 API-first 适配器、抖音巨量星图、飞书文档和安全回写组合成一条可验证的流水线：
+公开接口的 API-first 适配器、抖音巨量星图、飞书在线文档和安全回写组合成一条可验证的流水线：
 
 > 从 POPO 表完整读取任务范围 → 按平台批量查询 → 以原始键精确合并 →
 > 可选生成/更新飞书文档 → 条件批量写回数据和文档链接 → 对全部产物重新读取并验证。
@@ -30,7 +30,7 @@
 
 | Skill | 职责 | 主要能力 |
 |---|---|---|
-| [`research-sheet-pipeline`](skills/research-sheet-pipeline/) | 总编排器 | 冻结任务范围、按平台分批、字段标准化、精确合并、快路径/复杂路径选择、最终核验 |
+| [`research-sheet-pipeline`](skills/research-sheet-pipeline/) | 总编排器 | 冻结任务范围、按平台分批、字段标准化、精确合并、飞书官方 CLI 路由、最终核验 |
 | [`popo-sheet`](skills/popo-sheet/) | POPO 表格适配器 | 结构化全表读取、普通值与链接批量写回、写前条件检查、完整回读，以及格式类 UI 操作 |
 | [`douyin-xingtu`](skills/douyin-xingtu/) | 巨量星图只读适配器 | 达人/作品检索、已发布作品交叉校验、播放与互动数据、报价、榜单、内容和任务报告 |
 
@@ -44,7 +44,7 @@ flowchart LR
     E --> F
     F --> I{"需要飞书文档？"}
     I -- "否" --> G["popo-sheet<br/>S1 条件批量写回"]
-    I -- "是" --> J["Feishu provider<br/>模板复制/内容替换/权限/回读"]
+    I -- "是" --> J["官方 lark-cli<br/>文档/表格/Wiki/Drive/Base/Slides"]
     J --> G
     G --> H["S2 全范围结构化回读"]
 ```
@@ -84,7 +84,7 @@ flowchart LR
 | POPO | 启动一个 Kimi WebBridge task session，用原 URL `newTab:true` 打开新页 | 页面在线、可编辑、存在 `office.netease.com` iframe |
 | Bilibili | `python skills/research-sheet-pipeline/scripts/bilibili_batch.py --self-test` | 依赖、HTTP client、输入解析和 bounded retry 自检通过 |
 | 星图 | `python skills/douyin-xingtu/scripts/xingtu_batch.py self-test` | 已登录并真正进入 creator index，搜索控件已经渲染 |
-| 飞书 | `python skills/research-sheet-pipeline/scripts/document_provider.py --format json` | 找到满足本任务 read/copy/update/permission/readback 能力的 provider |
+| 飞书 | `python skills/research-sheet-pipeline/scripts/document_provider.py --format json` | 官方 `lark-cli` 健康，并满足本任务声明的精确 capability |
 
 路由是叠加关系：表里同时存在 Bilibili 和抖音记录时，两个适配器都必须运行；
 识别到一个平台不能覆盖或取消另一个平台。
@@ -314,22 +314,25 @@ Bilibili/星图研究和 canonical records 全部保留，配置完成后从文�
 [`name_match_tsv.py`](skills/popo-sheet/scripts/name_match_tsv.py) 只用于有界的矩形剪贴板
 fallback；它不是 POPO writer，也不能用相对行号或局部 TSV 证明全表覆盖率。
 
-### 飞书文档
+### 飞书在线文档
 
-主流水线包含一个不携带凭据的飞书适配器
-[`feishu_doc.py`](skills/research-sheet-pipeline/scripts/feishu_doc.py)，并通过
+所有飞书在线文档任务统一通过
 [`document_provider.py`](skills/research-sheet-pipeline/scripts/document_provider.py)
-选择当前机器可用的 provider。
+解析 Provider。首选并默认使用飞书官方 `lark-cli`；内置且不携带凭据的
+[`feishu_doc.py`](skills/research-sheet-pipeline/scripts/feishu_doc.py)
+只保留为兼容性 fallback。浏览器自动化不是飞书读取或编辑的 fallback。
 
-支持的文档动作包括：
+官方 CLI 路由覆盖：
 
-- 解析 Wiki/Docx URL 或 token；
-- 读取原始文本、全部 blocks 和结构签名；
-- 在原知识空间或 Drive 根目录复制模板；
-- grouped text replacement（支持 dry-run）和 append；
-- 读取公开权限；
-- 在明确确认目标 file token 后设置 anyone-with-link editable；
-- 写后重新读取内容、inline-style-aware 结构签名和权限。
+- Docs：创建、读取、更新、blocks、媒体和历史；
+- Sheets：值、公式、样式、校验、筛选、图表、透视表、结构、历史和导入导出；
+- Wiki、Drive、Base/多维表格、Slides、原生 Markdown、思维笔记和白板；
+- 文件搜索、复制、移动、评论、成员与公开权限；
+- typed OpenAPI schema discovery，以及 `lark-cli api` 原始 API escape hatch。
+
+`/wiki/<token>` 只是节点定位符。必须先解析底层 `obj_type` / `obj_token`，再交给
+对应的 Docs、Sheets、Base 或其他 domain。执行某个 domain 前，先读取官方 CLI
+随版本提供的 `lark-shared` 和相应 domain skill。
 
 Provider 解析顺序：
 
@@ -337,32 +340,32 @@ Provider 解析顺序：
 2. 显式 local config；
 3. `FEISHU_DOC_CLI`；
 4. 用户目录下的 pipeline local config；
-5. `PATH` 中兼容的 CLI；
-6. bundled `feishu_doc.py`。
+5. `PATH` 中的官方 `lark-cli`；
+6. `PATH` 中其他兼容 CLI；
+7. bundled `feishu_doc.py`。
 
-Resolver 本身无法检查 Agent connector catalog。如果结果是 `needs_credentials` 或
-`unavailable`，由 Agent 在 resolver 之外检查能力等价的 authenticated connector。
-外部兼容 CLI 一律先视为 `legacy_unverified`，完成只读 capability 和准确资源 preflight
-后才能参与 mutation。
+官方 CLI 只有在 `doctor` 通过后才会进入 ready；工具可用、账号 scope、目标文档 ACL
+和准确资源 preflight 是四个独立检查。其他外部兼容 CLI 一律先视为
+`legacy_unverified`，完成只读 capability 和准确资源 preflight 后才能参与 mutation。
 
 运行前检查：
 
 ```powershell
 python skills/research-sheet-pipeline/scripts/document_provider.py `
-  --required-capability document.read `
-  --required-capability document.copy `
-  --required-capability document.update `
-  --required-capability document.readback `
-  --required-capability document.structure.read `
-  --required-capability permission.public.read `
+  --required-capability spreadsheet.read `
+  --required-capability spreadsheet.write `
   --format json
+python skills/research-sheet-pipeline/scripts/document_provider.py --run -- `
+  drive +inspect --url "<feishu-url>"
+python skills/research-sheet-pipeline/scripts/document_provider.py --run -- `
+  sheets +workbook-info --url "<feishu-sheet-url>"
 python skills/research-sheet-pipeline/scripts/feishu_doc.py doctor
 python skills/research-sheet-pipeline/scripts/feishu_doc.py self-test
 ```
 
-如果任务明确要求将公开权限改为 anyone-with-link editable，还必须额外重复传入
-`--required-capability permission.public.anyone_editable`，并在 mutation 时确认准确的
-目标 file token。
+优先使用官方 CLI 的 `+` shortcut，其次使用 typed API，最后才使用 `lark-cli api`。
+mutation 前读取准确目标和 revision/history anchor；支持时先 dry-run；批量相关修改优先
+使用原子 batch；写后必须用 owning domain 回读，不以单个 `ok: true` 作为完成证明。
 
 Bundled provider 使用 tenant-app identity。运行时可从进程环境、`FEISHU_ENV_FILE`、
 `$CODEX_HOME/secrets/research-sheet-pipeline/feishu.env` 或
@@ -525,13 +528,20 @@ Windows PowerShell：
 [`webbridge_command.ps1`](skills/popo-sheet/scripts/webbridge_command.ps1) 只用于 Windows
 上的实际 WebBridge 请求，依赖 PowerShell 与 `curl.exe`，没有声明为跨平台 helper。
 
-如果任务包含飞书文档，再准备一种可用方式：
+如果任务包含飞书在线文档，优先安装并配置官方 CLI：
 
-- 在本机安全配置 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 并授权所需 scopes；或
-- 使用当前 Agent 已认证且能力等价的飞书 connector；或
-- 在用户 local config 中指定已经配置好的兼容 CLI。
+```powershell
+npx @larksuite/cli@latest install
+lark-cli config init
+lark-cli doctor
+```
+
+也可以在本机安全配置 bundled provider 所需的 `FEISHU_APP_ID` /
+`FEISHU_APP_SECRET`，但它只覆盖兼容能力集。无论使用哪种身份，都必须单独验证任务实际
+需要的 scopes 与目标文档 ACL，不能把凭据、Provider 路径或 profile 写入仓库。
 
 详细配置与 provider gate 见
+[`feishu-cli.md`](skills/research-sheet-pipeline/references/feishu-cli.md) 和
 [`document-providers.md`](skills/research-sheet-pipeline/references/document-providers.md)。
 
 ### 3. 直接描述任务
@@ -640,7 +650,8 @@ python skills/research-sheet-pipeline/scripts/feishu_doc.py self-test
 - Bilibili 依赖/client、ID 输入解析、normalize fixture 和 bounded retry；
 - 多模块 compose 合约；
 - checkpoint 原子写入、完整性校验、敏感信息清洗和最小产物 allowlist；
-- 飞书 provider 解析、文档操作参数和离线安全检查。
+- 官方 `lark-cli` 识别、健康检查、能力声明、命令路径隐藏，以及 bundled provider
+  的文档/表格操作参数和离线安全检查。
 
 `xingtu_batch.py self-test` 是需要 Kimi WebBridge daemon 和有效登录态的 live readiness
 检查；`test_xingtu_batch.py` 是离线单元测试。Bilibili `--self-test` 不执行真实公共接口
@@ -660,7 +671,7 @@ POPO 全范围扫描、fresh-tab mutation、一次 replacement 和完整回读�
 - POPO 页面出现只读、离线、保护提示或未知写入结果时 fail closed。
 - 不以截图、ACK 或局部 `mismatches=0` 作为完成证明。
 - 不持久化 cookie、token、完整工作簿快照或非必要调试文件。
-- 飞书文档适配器不包含凭据；App credentials 始终留在用户本地环境。
+- 飞书 Provider 不包含凭据；CLI profile 与 App credentials 始终留在用户本地环境。
 
 ## 目录
 
